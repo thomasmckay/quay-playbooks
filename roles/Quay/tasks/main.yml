@@ -1,7 +1,7 @@
 ---
-- name: Project {{ metadata.name }}
+- name: "Project {{ name }}"
   k8s:
-    name: {{ metadata.name }}
+    name: "{{ name }}"
     api_version: v1
     kind: Namespace
     state: present
@@ -14,9 +14,9 @@
       kind: Service
       metadata:
         name: quay-redis
-        namespace: {{ metadata.name }}
+        namespace: "{{ name }}"
         labels:
-          app: {{ metadata.name }}
+          app: "{{ name }}"
       spec:
         selector:
           name: quay-redis
@@ -25,3 +25,25 @@
           protocol: TCP
           targetPort: 6379
           port: 6379
+
+- name: Postgresql Service
+  k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: quay-postgresql
+        namespace: "{{ name }}"
+        labels:
+          app: "{{ name }}"
+      spec:
+        selector:
+          name: quay-postgresql
+        ports:
+        - name: postgresql
+          protocol: TCP
+          targetPort: 5432
+          port: 5432
+
+
