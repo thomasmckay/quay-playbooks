@@ -1,0 +1,6 @@
+---
+- version: v1alpha1
+  group: quay.io
+  kind: Quay
+  #role: /opt/ansible/playbook.yaml
+  role: /home/thomasmckay/code/operators/quay-operator/playbook.yaml

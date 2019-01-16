@@ -1,0 +1,27 @@
+---
+- name: Project {{ metadata.name }}
+  k8s:
+    name: {{ metadata.name }}
+    api_version: v1
+    kind: Namespace
+    state: present
+
+- name: Redis Service
+  k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: quay-redis
+        namespace: {{ metadata.name }}
+        labels:
+          app: {{ metadata.name }}
+      spec:
+        selector:
+          name: quay-redis
+        ports:
+        - name: redis
+          protocol: TCP
+          targetPort: 6379
+          port: 6379
