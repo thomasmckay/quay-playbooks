@@ -56,7 +56,60 @@
             path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-postgres
         EOF
 
+  - name: Check for PV 'quay-redis'
+    command: oc get pv -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-redis")].metadata.name}'
+    register: result
+  - name: Create PV 'quay-redis'
+    when: result.stdout != "quay-redis"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolume
+        apiVersion: v1
+        metadata:
+          name: quay-redis
+        spec:
+          capacity:
+            storage: 1Gi
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: slow
+          hostPath:
+            path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-redis
+        EOF
+
+  - name: Import redis image
+    command: oc import-image openshift/redis:32 --from=registry.access.redhat.com/rhscl/redis-32-rhel7 -n quay-enterprise --confirm
+
+  - name: Check for Template 'postgresql-persistent'
+    command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="postgresql-persistent")].metadata.name}'
+    register: result
+  - name: Create Template 'postgresql-persistent'
+    when: result.stdout != "postgresql-persistent"
+    command: oc create -n quay-enterprise -f https://raw.githubusercontent.com/openshift/origin/master/examples/db-templates/postgresql-persistent-template.json
+
+  - name: Check for DeploymentConfig 'quay-postgres'
+    command: oc get dc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
+    register: result
+  - name: Process Template 'postgresql-persistent'
+    when: result.stdout != "quay-postgres"
+    shell:
+      cmd: |
+        oc process postgresql-persistent \
+               -p POSTGRESQL_USER=quay \
+               -p POSTGRESQL_PASSWORD=quay \
+               -p POSTGRESQL_DATABASE=quay \
+               -p VOLUME_CAPACITY=1Gi \
+               -p DATABASE_SERVICE_NAME=quay-postgres \
+               -p MEMORY_LIMIT=512Mi \
+           | oc create -n quay-enterprise -f -
+
+  - name: Remove non-backed PVC 'quay-postgres'
+    when: result.stdout != "quay-postgres"
+    command: oc delete pvc -n quay-enterprise quay-postgres
+
   - name: Check for PVC 'quay-postgres'
+    when: result.stdout != "quay-postgres"
     command: oc get pvc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
     register: result
   - name: Create PVC 'quay-postgres'
@@ -79,25 +132,52 @@
             name: quay-postgres
         EOF
 
-  - name: Check for Template 'postgresql-persistent'
-    command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="postgresql-persistent")].metadata.name}'
-    register: result
-  - name: Create Template 'postgresql-persistent'
-    when: result.stdout != "postgresql-persistent"
-    command: oc create -n quay-enterprise -f https://raw.githubusercontent.com/openshift/origin/master/examples/db-templates/postgresql-persistent-template.json
 
-  - name: Check for DeploymentConfig 'quay-postgres'
-    command: oc get dc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
+  - name: Check for Template 'redis-persistent'
+    command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="redis-persistent")].metadata.name}'
     register: result
-  - name: Process Template 'postgresql-persistent'
-    when: result.stdout != "quay-postgres"
+  - name: Create Template 'redis-persistent'
+    when: result.stdout != "redis-persistent"
+    command: oc create -n quay-enterprise -f https://raw.githubusercontent.com/openshift/origin/master/examples/db-templates/redis-persistent-template.json
+
+  - name: Check for DeploymentConfig 'quay-redis'
+    command: oc get dc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-redis")].metadata.name}'
+    register: result
+  - name: Process Template 'redis-persistent'
+    when: result.stdout != "quay-redis"
     shell:
       cmd: |
-        oc process postgresql-persistent -n quay-enterprise \
-               -p POSTGRESQL_USER=quay \
-               -p POSTGRESQL_PASSWORD=quay \
-               -p POSTGRESQL_DATABASE=quay \
-               -p VOLUME_CAPACITY=1G \
-               -p DATABASE_SERVICE_NAME=quay-postgres \
-               -p MEMORY_LIMIT=512M \
+        oc process redis-persistent \
+               -p REDIS_PASSWORD=quay \
+               -p VOLUME_CAPACITY=1Gi \
+               -p DATABASE_SERVICE_NAME=quay-redis \
+               -p MEMORY_LIMIT=512Mi \
            | oc create -n quay-enterprise -f -
+
+  - name: Remove non-backed PVC 'quay-redis'
+    when: result.stdout != "quay-redis"
+    command: oc delete pvc -n quay-enterprise quay-redis
+
+  - name: Check for PVC 'quay-redis'
+    when: result.stdout != "quay-redis"
+    command: oc get pvc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-redis")].metadata.name}'
+    register: result
+  - name: Create PVC 'quay-redis'
+    when: result.stdout != "quay-redis"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolumeClaim
+        apiVersion: v1
+        metadata:
+          name: quay-redis
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+          storageClassName: slow
+          selector:
+            name: quay-redis
+        EOF
