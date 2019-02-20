@@ -1,0 +1,17 @@
+# ansible-playbook --private-key=~/.minishift/machines/minishift/id_rsa --u docker -i `minishift ip`, minishift.yaml
+
+- hosts: all
+  become: true
+  tasks:
+  - command: setenforce 0
+
+- hosts: localhost
+  tasks:
+
+  - name: Check for project 'quay-enterprise'
+    command: oc get projects -o jsonpath='{.items[?(.metadata.name=="quay-enterprise")].metadata.name}'
+    register: result
+  - name: Create project 'quay-enterprise' if doesn't exist
+    command: oc new-project quay-enterprise
+    when: result != "quay-enterprise"
+
