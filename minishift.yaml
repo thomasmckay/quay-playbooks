@@ -1,3 +1,4 @@
+# minishift delete --clear-cache --force && rm -rf ~/.minishift ~/.kube/*
 # minishift addons enable anyuid
 # minishift addons enable admin-user
 # minishift start --memory=12Gb
@@ -79,7 +80,7 @@
         EOF
 
   - name: Import redis image
-    command: oc import-image openshift/redis:32 --from=registry.access.redhat.com/rhscl/redis-32-rhel7 -n quay-enterprise --confirm
+    command: oc import-image openshift/redis:32 --from=registry.access.redhat.com/rhscl/redis-32-rhel7 -n quay-enterprise --confirm -n quay-enterprise
 
   - name: Check for Template 'postgresql-persistent'
     command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="postgresql-persistent")].metadata.name}'
@@ -181,3 +182,30 @@
           selector:
             name: quay-redis
         EOF
+
+  - name: Check for Secret 'quay-enterprise-config-secret'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-config-secret")].metadata.name}'
+    register: result
+  - name: Create Secret 'quay-enterprise-config-secret'
+    when: result.stdout != "quay-enterprise-config-secret"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: quay-enterprise-config-secret
+        EOF
+
+  - name: Check for Secret 'quay-dockerconfig'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-dockerconfig")].metadata.name}'
+    register: result
+  - name: Create Secret 'quay-dockerconfig'
+    when: result.stdout != "quay-dockerconfig"
+    shell:
+      cmd: |
+        oc create secret generic quay-dockerconfig --from-file=.dockerconfigjson=/home/thomasmckay/.docker/config.json --type=kubernetes.io/dockerconfigjson -n quay-enterprise
+        oc secrets link default quay-dockerconfig --for=pull -n quay-enterprise
+        oc secrets link deployer quay-dockerconfig -n quay-enterprise
+
+  #oc import-image openshift/quay:rhel7 --from=quay.io/thomasmckay/quay:rhel7 -n quay-enterprise --confirm
