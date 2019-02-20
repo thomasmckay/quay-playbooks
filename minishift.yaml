@@ -1,17 +1,103 @@
+# minishift addons enable anyuid
+# minishift addons enable admin-user
+# minishift start --memory=12Gb
+#
 # ansible-playbook --private-key=~/.minishift/machines/minishift/id_rsa --u docker -i `minishift ip`, minishift.yaml
+#
 
 - hosts: all
   become: true
   tasks:
-  - command: setenforce 0
+  - name: Permissive selinux
+    command: setenforce 0
+  - name: Persistent Volume root
+    file:
+      path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv
+      state: directory
+  - name: Persistent Volume quay-postgres
+    file:
+      path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-postgres
+      state: directory
+      mode: 0777
+  - name: Persistent Volume quay-redis
+    file:
+      path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-redis
+      state: directory
+      mode: 0777
 
 - hosts: localhost
   tasks:
-
   - name: Check for project 'quay-enterprise'
     command: oc get projects -o jsonpath='{.items[?(.metadata.name=="quay-enterprise")].metadata.name}'
     register: result
   - name: Create project 'quay-enterprise' if doesn't exist
     command: oc new-project quay-enterprise
-    when: result != "quay-enterprise"
+    when: result.stdout != "quay-enterprise"
 
+  - name: Check for PV 'quay-postgres'
+    command: oc get pv -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
+    register: result
+  - name: Create PV 'quay-postgres'
+    when: result.stdout != "quay-postgres"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolume
+        apiVersion: v1
+        metadata:
+          name: quay-postgres
+        spec:
+          capacity:
+            storage: 1Gi
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: slow
+          hostPath:
+            path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-postgres
+        EOF
+
+  - name: Check for PVC 'quay-postgres'
+    command: oc get pvc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
+    register: result
+  - name: Create PVC 'quay-postgres'
+    when: result.stdout != "quay-postgres"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolumeClaim
+        apiVersion: v1
+        metadata:
+          name: quay-postgres
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+          storageClassName: slow
+          selector:
+            name: quay-postgres
+        EOF
+
+  - name: Check for Template 'postgresql-persistent'
+    command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="postgresql-persistent")].metadata.name}'
+    register: result
+  - name: Create Template 'postgresql-persistent'
+    when: result.stdout != "postgresql-persistent"
+    command: oc create -n quay-enterprise -f https://raw.githubusercontent.com/openshift/origin/master/examples/db-templates/postgresql-persistent-template.json
+
+  - name: Check for DeploymentConfig 'quay-postgres'
+    command: oc get dc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
+    register: result
+  - name: Process Template 'postgresql-persistent'
+    when: result.stdout != "quay-postgres"
+    shell:
+      cmd: |
+        oc process postgresql-persistent -n quay-enterprise \
+               -p POSTGRESQL_USER=quay \
+               -p POSTGRESQL_PASSWORD=quay \
+               -p POSTGRESQL_DATABASE=quay \
+               -p VOLUME_CAPACITY=1G \
+               -p DATABASE_SERVICE_NAME=quay-postgres \
+               -p MEMORY_LIMIT=512M \
+           | oc create -n quay-enterprise -f -
