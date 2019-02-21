@@ -1,10 +1,19 @@
-# minishift delete --clear-cache --force && rm -rf ~/.minishift ~/.kube/*
-# minishift addons enable anyuid
-# minishift addons enable admin-user
-# minishift start --memory=12Gb
-#
 # ansible-playbook --private-key=~/.minishift/machines/minishift/id_rsa --u docker -i `minishift ip`, minishift.yaml
 #
+
+- hosts: localhost
+  tasks:
+  # ansible-playbook minishift.yaml --tags=minishift
+  - name: minishift
+    tags: [minishift]
+    shell:
+      cmd: |
+        minishift delete --clear-cache --force && rm -rf ~/.minishift ~/.kube/* && \
+        minishift start --memory=12Gb && \
+        minishift addons apply anyuid && \
+        minishift addons apply admin-user && \
+        oc login -u system:admin && \
+        minishift console
 
 - hosts: all
   become: true
@@ -104,15 +113,9 @@
                -p DATABASE_SERVICE_NAME=quay-postgres \
                -p MEMORY_LIMIT=512Mi \
            | oc create -n quay-enterprise -f -
-
   - name: Remove non-backed PVC 'quay-postgres'
     when: result.stdout != "quay-postgres"
     command: oc delete pvc -n quay-enterprise quay-postgres
-
-  - name: Check for PVC 'quay-postgres'
-    when: result.stdout != "quay-postgres"
-    command: oc get pvc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
-    register: result
   - name: Create PVC 'quay-postgres'
     when: result.stdout != "quay-postgres"
     shell:
@@ -154,15 +157,9 @@
                -p DATABASE_SERVICE_NAME=quay-redis \
                -p MEMORY_LIMIT=512Mi \
            | oc create -n quay-enterprise -f -
-
   - name: Remove non-backed PVC 'quay-redis'
     when: result.stdout != "quay-redis"
     command: oc delete pvc -n quay-enterprise quay-redis
-
-  - name: Check for PVC 'quay-redis'
-    when: result.stdout != "quay-redis"
-    command: oc get pvc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-redis")].metadata.name}'
-    register: result
   - name: Create PVC 'quay-redis'
     when: result.stdout != "quay-redis"
     shell:
