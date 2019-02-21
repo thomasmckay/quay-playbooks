@@ -1,20 +1,26 @@
-# ansible-playbook --private-key=~/.minishift/machines/minishift/id_rsa --u docker -i `minishift ip`, minishift.yaml
-#
 
+########
+# To restart minishift:
+#
+#    ansible-playbook minishift.yaml --tags=minishift
+#
 - hosts: localhost
   tasks:
-  # ansible-playbook minishift.yaml --tags=minishift
   - name: minishift
     tags: [minishift]
     shell:
       cmd: |
         minishift delete --clear-cache --force && rm -rf ~/.minishift ~/.kube/* && \
         minishift start --memory=12Gb && \
-        minishift addons apply anyuid && \
         minishift addons apply admin-user && \
         oc login -u system:admin && \
         minishift console
 
+########
+# To setup quay
+#
+# ansible-playbook --skip-tags=minishift --private-key=~/.minishift/machines/minishift/id_rsa --u docker -i `minishift ip`, minishift.yaml
+#
 - hosts: all
   become: true
   tasks:
@@ -194,15 +200,96 @@
           name: quay-enterprise-config-secret
         EOF
 
-  - name: Check for Secret 'quay-dockerconfig'
-    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-dockerconfig")].metadata.name}'
+  - name: Check for Secret 'quay-pull-secret'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-pull-secret")].metadata.name}'
     register: result
-  - name: Create Secret 'quay-dockerconfig'
-    when: result.stdout != "quay-dockerconfig"
+  - name: Create Secret 'quay-pull-secret'
+    when: result.stdout != "quay-pull-secret"
     shell:
       cmd: |
-        oc create secret generic quay-dockerconfig --from-file=.dockerconfigjson=/home/thomasmckay/.docker/config.json --type=kubernetes.io/dockerconfigjson -n quay-enterprise
-        oc secrets link default quay-dockerconfig --for=pull -n quay-enterprise
-        oc secrets link deployer quay-dockerconfig -n quay-enterprise
+        oc create secret generic quay-pull-secret --from-file=.dockerconfigjson=/home/thomasmckay/.docker/config.json --type=kubernetes.io/dockerconfigjson -n quay-enterprise
+        oc secrets link default quay-pull-secret --for=pull -n quay-enterprise
+        oc secrets link deployer quay-pull-secret -n quay-enterprise
 
-  #oc import-image openshift/quay:rhel7 --from=quay.io/thomasmckay/quay:rhel7 -n quay-enterprise --confirm
+  - name: Check for 'quay:rhel7' image
+    shell:
+      cmd: oc get images -n quay-enterprise -o jsonpath='{.items[*].dockerImageReference}' | grep quay.io/thomasmckay/quay
+    ignore_errors: yes
+    register: result
+  - name: Import image 'quay:rhel7'
+    when: result is failure
+    command: oc import-image quay:rhel7 --from=quay.io/thomasmckay/quay:rhel7 -n quay-enterprise --confirm
+
+  - name: Check for Deployment 'quay-registry'
+    command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
+    register: result
+  - name: Create Deployment 'quay-enterprise'
+    when: result.stdout != "quay-registry"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: extensions/v1beta1
+        kind: Deployment
+        metadata:
+          namespace: quay-enterprise
+          name: quay-registry
+          labels:
+            quay-enterprise-component: app
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              quay-enterprise-component: app
+          template:
+            metadata:
+              namespace: quay-enterprise
+              labels:
+                quay-enterprise-component: app
+            spec:
+              volumes:
+                - name: configvolume
+                  secret:
+                    secretName: quay-enterprise-config-secret
+              containers:
+              - name: quay-enterprise
+                image: quay.io/thomasmckay/quay:rhel7
+                ports:
+                - containerPort: 80
+                  protocol: TCP
+                - containerPort: 443
+                  protocol: TCP
+                volumeMounts:
+                - name: configvolume
+                  readOnly: false
+                  mountPath: /conf/stack
+              imagePullSecrets:
+                - name: quay-pull-secret
+        EOF
+
+
+  - name: Check for Service 'quay-registry'
+    command: oc get services -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
+    register: result
+  - name: Create Service 'quay-registry'
+    when: result.stdout != "quay-registry"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          namespace: quay-enterprise
+          name: quay-registry
+        spec:
+          ports:
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: 80
+            - name: https
+              protocol: TCP
+              port: 443
+              targetPort: 443
+          selector:
+            quay-enterprise-component: app
+        EOF
