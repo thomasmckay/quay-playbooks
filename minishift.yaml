@@ -253,6 +253,7 @@
               containers:
               - name: quay-enterprise
                 image: quay.io/thomasmckay/quay:rhel7
+                imagePullPolicy: Always
                 ports:
                 - containerPort: 80
                   protocol: TCP
@@ -265,7 +266,6 @@
               imagePullSecrets:
                 - name: quay-pull-secret
         EOF
-
 
   - name: Check for Service 'quay-registry'
     command: oc get services -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
@@ -292,4 +292,137 @@
               targetPort: 443
           selector:
             quay-enterprise-component: app
+        EOF
+
+  - name: Check for Route 'quay-registry'
+    command: oc get routes -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
+    register: result
+  - name: Create Route 'quay-registry'
+    when: result.stdout != "quay-registry"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: route.openshift.io/v1
+        kind: Route
+        metadata:
+          labels:
+            quay-enterprise-component: app
+          name: quay-registry
+          namespace: quay-enterprise
+        spec:
+          port:
+            targetPort: https
+          tls:
+            insecureEdgeTerminationPolicy: Redirect
+            termination: passthrough
+          to:
+            kind: Service
+            name: quay-registry
+            weight: 100
+          wildcardPolicy: None
+        EOF
+
+
+  - name: Check for Deployment 'quay-config'
+    command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-config")].metadata.name}'
+    register: result
+  - name: Create Deployment 'quay-enterprise'
+    when: result.stdout != "quay-config"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: extensions/v1beta1
+        kind: Deployment
+        metadata:
+          namespace: quay-enterprise
+          name: quay-config
+          labels:
+            quay-enterprise-component: app
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              quay-enterprise-component: app
+          template:
+            metadata:
+              namespace: quay-enterprise
+              labels:
+                quay-enterprise-component: app
+            spec:
+              volumes:
+                - name: configvolume
+                  secret:
+                    secretName: quay-enterprise-config-secret
+              containers:
+              - name: quay-enterprise
+                image: quay.io/thomasmckay/quay:rhel7
+                imagePullPolicy: Always
+                args:
+                - config
+                ports:
+                - containerPort: 80
+                  protocol: TCP
+                - containerPort: 443
+                  protocol: TCP
+                volumeMounts:
+                - name: configvolume
+                  readOnly: false
+                  mountPath: /conf/stack
+              imagePullSecrets:
+                - name: quay-pull-secret
+        EOF
+
+  - name: Check for Service 'quay-config'
+    command: oc get services -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-config")].metadata.name}'
+    register: result
+  - name: Create Service 'quay-config'
+    when: result.stdout != "quay-config"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          namespace: quay-enterprise
+          name: quay-config
+        spec:
+          ports:
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: 80
+            - name: https
+              protocol: TCP
+              port: 443
+              targetPort: 443
+          selector:
+            quay-enterprise-component: app
+        EOF
+
+  - name: Check for Route 'quay-config'
+    command: oc get routes -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-config")].metadata.name}'
+    register: result
+  - name: Create Route 'quay-config'
+    when: result.stdout != "quay-config"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: route.openshift.io/v1
+        kind: Route
+        metadata:
+          labels:
+            quay-enterprise-component: app
+          name: quay-config
+          namespace: quay-enterprise
+        spec:
+          port:
+            targetPort: https
+          tls:
+            insecureEdgeTerminationPolicy: Redirect
+            termination: passthrough
+          to:
+            kind: Service
+            name: quay-config
+            weight: 100
+          wildcardPolicy: None
         EOF
