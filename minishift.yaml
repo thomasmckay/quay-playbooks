@@ -43,7 +43,7 @@
 
 - hosts: localhost
   tasks:
-  - name: Check for project 'quay-enterprise'
+  - name: Check for Project 'quay-enterprise'
     command: oc get projects -o jsonpath='{.items[?(.metadata.name=="quay-enterprise")].metadata.name}'
     register: result
   - name: Create project 'quay-enterprise' if doesn't exist
@@ -142,6 +142,23 @@
             name: quay-postgres
         EOF
 
+  # ???? how to wait for pod to spin up?
+  - name: Check for Pod 'quay-postgres'
+    shell:
+      cmd: oc get pods -n quay-enterprise -o jsonpath='{.items[*].metadata.name}' | grep quay-postgres
+    ignore_errors: yes
+    register: result
+  - name: Get name of Pod 'quay-postgres'
+    when: result is succeeded
+    shell:
+      cmd: |
+        oc get pods | grep quay-postgres | awk '{print $1}'
+    register: result
+  - name: Add postgres extensions to Pod 'quay-postgres'
+    when: result is succeeded
+    shell:
+      cmd: |
+        oc rsh {{ result.stdout }} /bin/bash -c 'echo "CREATE EXTENSION pg_trgm" | /opt/rh/rh-postgresql10/root/usr/bin/psql'
 
   - name: Check for Template 'redis-persistent'
     command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="redis-persistent")].metadata.name}'
@@ -285,11 +302,11 @@
             - name: http
               protocol: TCP
               port: 80
-              targetPort: 80
+              targetPort: 8080
             - name: https
               protocol: TCP
               port: 443
-              targetPort: 443
+              targetPort: 8443
           selector:
             quay-enterprise-component: app
         EOF
@@ -390,11 +407,11 @@
             - name: http
               protocol: TCP
               port: 80
-              targetPort: 80
+              targetPort: 8080
             - name: https
               protocol: TCP
               port: 443
-              targetPort: 443
+              targetPort: 8443
           selector:
             quay-enterprise-component: app
         EOF
