@@ -146,13 +146,14 @@
             name: quay-postgres
         EOF
 
-  # ???? how to wait for pod to spin up?
-  - name: Check for Pod 'quay-postgres'
+  - name: Wait for Pod 'quay-postgres'
     tags: [postgres]
     shell:
-      cmd: oc get pods -n quay-enterprise -o jsonpath='{.items[*].metadata.name}' | grep quay-postgres
-    ignore_errors: yes
+      cmd: oc get pods -n quay-enterprise | grep quay-postgres
     register: result
+    until: "'Running' in (result.stdout)"
+    retries: 5
+    delay: 10
   - name: Get name of Pod 'quay-postgres'
     tags: [postgres]
     when: result is succeeded
