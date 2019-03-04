@@ -1,3 +1,7 @@
+########
+# Notes:
+# + to update a secret
+#  oc create secret generic privkey --from-file=/opt/privkey --dry-run -o yaml | oc replace -f -
 
 ########
 # To restart minishift:
@@ -144,21 +148,30 @@
 
   # ???? how to wait for pod to spin up?
   - name: Check for Pod 'quay-postgres'
+    tags: [postgres]
     shell:
       cmd: oc get pods -n quay-enterprise -o jsonpath='{.items[*].metadata.name}' | grep quay-postgres
     ignore_errors: yes
     register: result
   - name: Get name of Pod 'quay-postgres'
+    tags: [postgres]
     when: result is succeeded
     shell:
       cmd: |
         oc get pods | grep quay-postgres | awk '{print $1}'
-    register: result
+    register: pod
   - name: Add postgres extensions to Pod 'quay-postgres'
+    tags: [postgres]
     when: result is succeeded
     shell:
       cmd: |
-        oc rsh {{ result.stdout }} /bin/bash -c 'echo "CREATE EXTENSION pg_trgm" | /opt/rh/rh-postgresql10/root/usr/bin/psql'
+        oc rsh {{ pod.stdout }} /bin/bash -c 'echo "CREATE EXTENSION pg_trgm" | /opt/rh/rh-postgresql10/root/usr/bin/psql'
+  - name: Add postgres SUPERUSER permission to Pod 'quay-postgres'
+    tags: [postgres]
+    when: result is succeeded
+    shell:
+      cmd: |
+        oc rsh {{ pod.stdout }} /bin/bash -c 'echo "ALTER USER quay WITH SUPERUSER;" | /opt/rh/rh-postgresql10/root/usr/bin/psql'
 
   - name: Check for Template 'redis-persistent'
     command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="redis-persistent")].metadata.name}'
@@ -236,6 +249,70 @@
   - name: Import image 'quay:rhel7'
     when: result is failure
     command: oc import-image quay:rhel7 --from=quay.io/thomasmckay/quay:rhel7 -n quay-enterprise --confirm
+
+  - name: Check for Role 'quay-enterprise-serviceaccount'
+    command: oc get roles -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-serviceaccount")].metadata.name}'
+    register: result
+  - name: Create Role 'quay-enterprise-serviceaccount'
+    when: result.stdout != "quay-enterprise-serviceaccount"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Role
+        metadata:
+          name: quay-enterprise-serviceaccount
+          namespace: quay-enterprise
+        rules:
+        - apiGroups:
+          - ""
+          resources:
+          - secrets
+          verbs:
+          - get
+          # TODO: below don't work openshift online
+          - put
+          - patch
+          - update
+        - apiGroups:
+          - ""
+          resources:
+          - namespaces
+          verbs:
+          - get
+        - apiGroups:
+          - extensions
+          - apps
+          resources:
+          - deployments
+          verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        EOF
+  - name: Check for RoleBinding 'quay-enterprise'
+    command: oc get roles -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-serviceaccount")].metadata.name}'
+    register: result
+  - name: Create RoleBinding 'quay-enterprise'
+    when: result.stdout != "quay-enterprise"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: rbac.authorization.k8s.io/v1beta1
+        kind: RoleBinding
+        metadata:
+          name: quay-enterprise-secret-writer
+          namespace: quay-enterprise
+        roleRef:
+          #apiGroup: rbac.authorization.k8s.io
+          kind: Role
+          name: quay-enterprise-serviceaccount
+        subjects:
+        - kind: ServiceAccount
+          name: default
+        EOF
 
   - name: Check for Deployment 'quay-registry'
     command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
@@ -354,17 +431,17 @@
           namespace: quay-enterprise
           name: quay-config
           labels:
-            quay-enterprise-component: app
+            quay-enterprise-component: config
         spec:
           replicas: 1
           selector:
             matchLabels:
-              quay-enterprise-component: app
+              quay-enterprise-component: config
           template:
             metadata:
               namespace: quay-enterprise
               labels:
-                quay-enterprise-component: app
+                quay-enterprise-component: config
             spec:
               volumes:
                 - name: configvolume
@@ -413,7 +490,7 @@
               port: 443
               targetPort: 8443
           selector:
-            quay-enterprise-component: app
+            quay-enterprise-component: config
         EOF
 
   - name: Check for Route 'quay-config'
@@ -428,7 +505,7 @@
         kind: Route
         metadata:
           labels:
-            quay-enterprise-component: app
+            quay-enterprise-component: config
           name: quay-config
           namespace: quay-enterprise
         spec:
