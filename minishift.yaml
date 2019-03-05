@@ -318,7 +318,7 @@
   - name: Check for Deployment 'quay-registry'
     command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
     register: result
-  - name: Create Deployment 'quay-enterprise'
+  - name: Create Deployment 'quay-registry'
     when: result.stdout != "quay-registry"
     shell:
       cmd: |
@@ -349,6 +349,9 @@
               - name: quay-enterprise
                 image: quay.io/thomasmckay/quay:rhel7
                 imagePullPolicy: Always
+                env:
+                  - name: QUAYENTRY
+                    value: registry
                 ports:
                 - containerPort: 80
                   protocol: TCP
@@ -417,11 +420,10 @@
           wildcardPolicy: None
         EOF
 
-
   - name: Check for Deployment 'quay-config'
     command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-config")].metadata.name}'
     register: result
-  - name: Create Deployment 'quay-enterprise'
+  - name: Create Deployment 'quay-config'
     when: result.stdout != "quay-config"
     shell:
       cmd: |
@@ -452,8 +454,9 @@
               - name: quay-enterprise
                 image: quay.io/thomasmckay/quay:rhel7
                 imagePullPolicy: Always
-                args:
-                - config
+                env:
+                  - name: QUAYENTRY
+                    value: config
                 ports:
                 - containerPort: 80
                   protocol: TCP
