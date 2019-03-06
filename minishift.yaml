@@ -524,3 +524,26 @@
             weight: 100
           wildcardPolicy: None
         EOF
+
+  - name: Create TLS cert and key
+    tags: [tls]
+    shell:
+      cmd: |
+        openssl genrsa -out tmp/rootCA.key 2048
+        openssl req -x509 -new -nodes -key tmp/rootCA.key -sha256 -days 1024 -out tmp/rootCA.pem -subj '/CN=*.`minishift ip`.nip.io'
+        cat <<EOF > tmp/quay.conf
+        [req]
+        req_extensions = v3_req
+        distinguished_name = req_distinguished_name
+        [req_distinguished_name]
+        [ v3_req ]
+        basicConstraints = CA:FALSE
+        keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+        subjectAltName = @alt_names
+        [alt_names]
+        DNS.1 = *.`minishift ip`.nip.io
+        IP.1 = `minishift ip`
+        EOF
+        openssl genrsa -out tmp/quay.key 2048
+        openssl req -new -key tmp/quay.key -out tmp/quay.csr -subj "/CN=*.`minishift ip`.nip.io" -config tmp/quay.conf
+        openssl x509 -req -in tmp/quay.csr -CA tmp/rootCA.pem -CAkey tmp/rootCA.key -CAcreateserial -out tmp/quay.cert -days 356 -extensions v3_req -extfile tmp/quay.conf
