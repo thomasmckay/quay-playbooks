@@ -177,7 +177,7 @@
     when: result is succeeded
     shell:
       cmd: |
-        oc get pods | grep quay-postgres | awk '{print $1}'
+        oc get pods | grep quay-postgres | grep -v deploy | awk '{print $1}'
     register: pod
   - name: Add postgres extensions to Pod 'quay-postgres'
     tags: [postgres]
@@ -248,6 +248,49 @@
         metadata:
           name: quay-enterprise-config-secret
         EOF
+
+  - name: Check for Secret 'quay-enterprise-cert-secret'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-cert-secret")].metadata.name}'
+    register: result
+  - name: Create TLS cert and key
+    when: result.stdout != "quay-enterprise-cert-secret"
+    shell:
+      cmd: |
+        openssl genrsa -out tmp/rootCA.key 2048
+        openssl req -x509 -new -nodes -key tmp/rootCA.key -sha256 -days 1024 -out tmp/rootCA.pem -subj '/CN=*.`minishift ip`.nip.io'
+        cat <<EOF > tmp/quay.conf
+        [req]
+        req_extensions = v3_req
+        distinguished_name = req_distinguished_name
+        [req_distinguished_name]
+        [ v3_req ]
+        basicConstraints = CA:FALSE
+        keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+        subjectAltName = @alt_names
+        [alt_names]
+        DNS.1 = *.`minishift ip`.nip.io
+        IP.1 = `minishift ip`
+        EOF
+        openssl genrsa -out tmp/quay.key 2048
+        openssl req -new -key tmp/quay.key -out tmp/quay.csr -subj "/CN=*.`minishift ip`.nip.io" -config tmp/quay.conf
+        openssl x509 -req -in tmp/quay.csr -CA tmp/rootCA.pem -CAkey tmp/rootCA.key -CAcreateserial -out tmp/quay.cert -days 356 -extensions v3_req -extfile tmp/quay.conf
+  - name: Create server cert
+    when: result.stdout != "quay-enterprise-cert-secret"
+    shell:
+      cmd: |
+        oc adm ca create-server-cert \
+          --signer-cert=tmp/minishift.crt \
+          --signer-key=tmp/minishift.key \
+          --signer-serial=tmp/minishift.serial.txt \
+          --hostnames="`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.host}'`,`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.host}'`" \
+          --cert=ssl.cert \
+          --key=ssl.key
+  - name: Create secret 'quay-enterprise-cert-secret'
+    when: result.stdout != "quay-enterprise-cert-secret"
+    shell:
+      cmd: |
+        oc create secret generic quay-enterprise-cert-secret \
+           --from-file=ssl.cert=tmp/quay.cert --from-file=ssl.key=tmp/quay.key -n quay-enterprise
 
   - name: Check for Secret 'quay-pull-secret'
     command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-pull-secret")].metadata.name}'
@@ -361,8 +404,14 @@
             spec:
               volumes:
                 - name: configvolume
-                  secret:
-                    secretName: quay-enterprise-config-secret
+                  projected:
+                    defaultMode: 511
+                    sources:
+                    - secret:
+                        name: quay-enterprise-config-secret
+                        path: config.yaml
+                    - secret:
+                        name: quay-enterprise-cert-secret
               containers:
               - name: quay-enterprise
                 image: quay.io/thomasmckay/quay:rhel7
@@ -466,8 +515,13 @@
             spec:
               volumes:
                 - name: configvolume
-                  secret:
-                    secretName: quay-enterprise-config-secret
+                  projected:
+                    sources:
+                    - secret:
+                        name: quay-enterprise-config-secret
+                        path: config.yaml
+                    - secret:
+                        name: quay-enterprise-cert-secret
               containers:
               - name: quay-enterprise
                 image: quay.io/thomasmckay/quay:rhel7
@@ -542,38 +596,3 @@
             weight: 100
           wildcardPolicy: None
         EOF
-
-  - name: Create TLS cert and key
-    tags: [tls]
-    shell:
-      cmd: |
-        openssl genrsa -out tmp/rootCA.key 2048
-        openssl req -x509 -new -nodes -key tmp/rootCA.key -sha256 -days 1024 -out tmp/rootCA.pem -subj '/CN=*.`minishift ip`.nip.io'
-        cat <<EOF > tmp/quay.conf
-        [req]
-        req_extensions = v3_req
-        distinguished_name = req_distinguished_name
-        [req_distinguished_name]
-        [ v3_req ]
-        basicConstraints = CA:FALSE
-        keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-        subjectAltName = @alt_names
-        [alt_names]
-        DNS.1 = *.`minishift ip`.nip.io
-        IP.1 = `minishift ip`
-        EOF
-        openssl genrsa -out tmp/quay.key 2048
-        openssl req -new -key tmp/quay.key -out tmp/quay.csr -subj "/CN=*.`minishift ip`.nip.io" -config tmp/quay.conf
-        openssl x509 -req -in tmp/quay.csr -CA tmp/rootCA.pem -CAkey tmp/rootCA.key -CAcreateserial -out tmp/quay.cert -days 356 -extensions v3_req -extfile tmp/quay.conf
-
-  - name: Create server cert
-    tags: [tls]
-    shell:
-      cmd: |
-        oc adm ca create-server-cert \
-          --signer-cert=tmp/minishift.crt \
-          --signer-key=tmp/minishift.key \
-          --signer-serial=tmp/minishift.serial.txt \
-          --hostnames="`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.host}'`,`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.host}'`" \
-          --cert=ssl.cert \
-          --key=ssl.key
