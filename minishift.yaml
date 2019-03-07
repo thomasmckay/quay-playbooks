@@ -167,7 +167,7 @@
   - name: Wait for Pod 'quay-postgres'
     tags: [postgres]
     shell:
-      cmd: oc get pods -n quay-enterprise | grep quay-postgres
+      cmd: oc get pods -n quay-enterprise | grep quay-postgres | grep -v deploy
     register: result
     until: "'Running' in (result.stdout)"
     retries: 5
