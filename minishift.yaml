@@ -1,7 +1,9 @@
 ########
 # Notes:
 # + to update a secret
-#  oc create secret generic privkey --from-file=/opt/privkey --dry-run -o yaml | oc replace -f -
+#   oc create secret generic privkey --from-file=/opt/privkey --dry-run -o yaml | oc replace -f -
+# + to redeploy
+#   oc set env deployment/quay-registry REDEPLOY=`date`
 
 ########
 # To restart minishift:
@@ -42,6 +44,12 @@
   - name: Persistent Volume quay-redis
     file:
       path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-redis
+      state: directory
+      mode: 0777
+  - name: Persistent Volume clair-postgres
+    tags: [clair]
+    file:
+      path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/clair-postgres
       state: directory
       mode: 0777
   - name: Fetch minishift ca.crt
@@ -419,6 +427,8 @@
                 env:
                   - name: QUAYENTRY
                     value: registry
+                  - name: REDEPLOY
+                    value: 1
                 ports:
                 - containerPort: 80
                   protocol: TCP
@@ -529,6 +539,8 @@
                 env:
                   - name: QUAYENTRY
                     value: config
+                  - name: REDEPLOY
+                    value: 1
                 ports:
                 - containerPort: 80
                   protocol: TCP
@@ -595,4 +607,225 @@
             name: quay-config
             weight: 100
           wildcardPolicy: None
+        EOF
+
+  - name: Check for PV 'clair-postgres'
+    tags: [clair]
+    command: oc get pv -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-postgres")].metadata.name}'
+    register: result
+  - name: Create PV 'clair-postgres'
+    tags: [clair]
+    when: result.stdout != "clair-postgres"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolume
+        apiVersion: v1
+        metadata:
+          name: clair-postgres
+        spec:
+          capacity:
+            storage: 1Gi
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: slow
+          hostPath:
+            path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/clair-postgres
+        EOF
+
+  - name: Check for DeploymentConfig 'clair-postgres'
+    tags: [clair]
+    command: oc get dc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-postgres")].metadata.name}'
+    register: result
+  - name: Process Template 'clair-postgres'
+    tags: [clairx]
+    when: result.stdout != "clair-postgres"
+    shell:
+      cmd: |
+        oc process postgresql-persistent \
+               -p POSTGRESQL_USER=clair \
+               -p POSTGRESQL_PASSWORD=clair \
+               -p POSTGRESQL_DATABASE=clair \
+               -p VOLUME_CAPACITY=1Gi \
+               -p DATABASE_SERVICE_NAME=clair-postgres \
+               -p MEMORY_LIMIT=512Mi \
+           | oc apply -n quay-enterprise -f -
+
+  - name: Remove non-backed PVC 'clair-postgres'
+    tags: [clair]
+    when: result.stdout != "clair-postgres"
+    command: oc delete pvc -n quay-enterprise clair-postgres
+  - name: Create PVC 'clair-postgres'
+    tags: [clair]
+    when: result.stdout != "clair-postgres"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolumeClaim
+        apiVersion: v1
+        metadata:
+          name: clair-postgres
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+          storageClassName: slow
+          selector:
+            name: clair-postgres
+        EOF
+
+  - name: Check for Secret 'clair-config-secret'
+    tags: [clair, testing]
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-security-scanner-secret")].metadata.name}'
+    register: result
+  - name: Create secret 'clair-config-secret'
+    tags: [clair]
+    when: result.stdout != "clair-security-scanner-secret"
+    shell:
+      cmd: |
+        oc create secret generic clair-security-scanner-secret \
+           --from-file=security_scanner.pem=tmp/security_scanner.pem -n quay-enterprise
+  - name: Update secret 'clair-security-scanner-secret'
+    tags: [clair, testing]
+    when: result.stdout == "clair-config-secret"
+    shell:
+      cmd: |
+        oc create secret generic clair-security-scanner-secret \
+           --from-file=security_scanner.pem=tmp/security_scanner.pem -n quay-enterprise \
+           --dry-run -o yaml | oc replace -f -
+
+  - name: Check for Secret 'clair-config-secret'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-config-secret")].metadata.name}'
+    register: result
+  - name: Create clair.yaml for Secret 'clair-config-secret'
+    tags: [clair]
+    shell:
+      cmd: |
+        cat <<EOF > tmp/clair.yaml
+        clair:
+          database:
+            type: pgsql
+            options:
+              source: postgresql://clair:clair@clair-postgres.quay-enterprise.svc/clair?sslmode=disable
+              cachesize: 16384
+          api:
+            healthport: 6061
+            port: 6062
+            timeout: 900s
+            paginationkey: "XxoPtCUzrUv4JV5dS+yQ+MdW7yLEJnRMwigVY/bpgtQ="
+          updater:
+            interval: 6h
+            enabledupdaters:
+            - rhel
+            - alpine
+            notifier:
+              attempts: 3
+              renotifyinterval: 1h
+              http:
+                endpoint: https://quay-registry.quay-enterprise.svc/secscan/notify
+                proxy: http://localhost:6063
+        jwtproxy:
+          signer_proxy:
+            enabled: true
+            listen_addr: :6063
+            ca_key_file: /certificates/mitm.key
+            ca_crt_file: /certificates/mitm.crt
+            signer:
+              issuer: security_scanner
+              expiration_time: 5m
+              max_skew: 1m
+              nonce_length: 32
+              private_key:
+                type: preshared
+                options:
+                  key_id: e93e8d55fcf0efb22368c09e710d751eb66d7d52395e798fef83978acc52f0c2
+                  #private_key_path: /config/security_scanner.pem
+                  private_key_path: /etc/clair/security_scanner.pem
+          verifier_proxies:
+          - enabled: true
+            listen_addr: :6060
+            # section below for more information.
+            # key_file: /config/clair.key
+            # crt_file: /config/clair.crt
+            verifier:
+              audience: https://quay-config.quay-enterprise.svc:6060
+              upstream: http://localhost:6062
+              key_server:
+                type: keyregistry
+                options:
+                  registry: https://quay-registry.quay-enterprise.svc/keys/
+        EOF
+  # - name: Create secret 'clair-config-secret'
+  #   tags: [clair]
+  #   when: result.stdout != "clair-config-secret"
+  #   shell:
+  #     cmd: |
+  #       oc create secret generic clair-config-secret \
+  #          --from-file=config.yaml=tmp/clair.yaml -n quay-enterprise
+  - name: Update secret 'clair-config-secret'
+    tags: [clair]
+    when: result.stdout == "clair-config-secret"
+    shell:
+      cmd: |
+        oc create secret generic clair-config-secret \
+           --from-file=config.yaml=tmp/clair.yaml -n quay-enterprise \
+           --dry-run -o yaml | oc replace -f -
+
+  - name: Check for Deployment 'clair'
+    tags: [clair]
+    command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair")].metadata.name}'
+    register: result
+  - name: Create or update Deployment 'clair'
+    tags: [clair]
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: extensions/v1beta1
+        kind: Deployment
+        metadata:
+          namespace: quay-enterprise
+          name: clair
+          labels:
+            quay-enterprise-component: clair
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              quay-enterprise-component: clair
+          template:
+            metadata:
+              namespace: quay-enterprise
+              labels:
+                quay-enterprise-component: clair
+            spec:
+              volumes:
+                - name: configvolume
+                  projected:
+                    defaultMode: 511
+                    sources:
+                    - secret:
+                        name: clair-config-secret
+                        path: config.yaml
+                    - secret:
+                        name: clair-security-scanner-secret
+                        path: security_scanner.pem
+              containers:
+              - name: quay-enterprise
+                #image: quay.io/thomasmckay/clair:rhel7
+                image: quay.io/coreos/clair:v2.0.7
+                imagePullPolicy: Always
+                ports:
+                - containerPort: 6060
+                  protocol: TCP
+                - containerPort: 6061
+                  protocol: TCP
+                volumeMounts:
+                - name: configvolume
+                  readOnly: false
+                  # mountPath: /config
+                  mountPath: /etc/clair
+              imagePullSecrets:
+                - name: quay-pull-secret
         EOF
