@@ -1,2 +1,2 @@
-minishift.retry
+*.retry
 tmp/*
