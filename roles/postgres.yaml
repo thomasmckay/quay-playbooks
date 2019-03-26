@@ -1,0 +1,60 @@
+---
+# - include: persistent-volume-claim.yaml
+
+- name: Download template 'postgresql-persistent'
+  shell:
+    cmd:
+      "oc create -n {{ namespace }} -f https://raw.githubusercontent.com/openshift/origin/master/examples/db-templates/postgresql-persistent-template.json --dry-run=true -o yaml > ../tmp/postgresql-persistent-template.yaml"
+  args:
+    creates: ../tmp/postgresql-persistent-template.yaml
+
+- name: Template 'postgresql-persistent'
+  k8s:
+    state: present
+    name: postgresql-persistent
+    namespace: "{{ namespace }}"
+    src: ../tmp/postgresql-persistent-template.yaml
+
+- name: "Check for DeploymentConfig '{{ name }}'"
+  shell:
+    cmd:
+      oc get dc -n "{{ namespace }}" -o jsonpath='{.items[?(.metadata.name=="{{ name }}")].metadata.name}' | grep "{{ name }}"
+  ignore_errors: yes
+  register: result
+- name: Process Template 'postgresql-persistent'
+  when: result is failure
+  shell:
+    cmd:
+      "oc process postgresql-persistent -n {{ namespace }} \
+             -p POSTGRESQL_USER={{ user }} \
+             -p POSTGRESQL_PASSWORD={{ password }} \
+             -p POSTGRESQL_DATABASE={{ database }} \
+             -p VOLUME_CAPACITY=1Gi \
+             -p DATABASE_SERVICE_NAME={{ name }} \
+             -p MEMORY_LIMIT=512Mi \
+         | oc create -n {{ namespace }} -f -"
+
+- name: "Wait for Pod '{{ name }}'"
+  shell:
+    cmd:
+      "oc get pods -n {{ namespace }} | grep {{ name }} | grep -v deploy"
+  register: result
+  until: "'Running' in (result.stdout)"
+  retries: 5
+  delay: 10
+- name: "Get name of Pod '{{ name }}'"
+  when: result is succeeded
+  shell:
+    cmd:
+      "oc get pods -n {{ namespace }} | grep {{ name }} | grep -v deploy | awk '{print $1}'"
+  register: pod
+- name: "Add postgres extensions to Pod '{{ name }}'"
+  when: result is succeeded
+  shell:
+    cmd:
+      oc rsh -n "{{ namespace }}" {{ pod.stdout }} /bin/bash -c 'echo "CREATE EXTENSION pg_trgm" | /opt/rh/rh-postgresql10/root/usr/bin/psql'
+- name: "Add postgres SUPERUSER permission to Pod '{{ name }}'"
+  when: result is succeeded
+  shell:
+    cmd:
+      oc rsh -n "{{ namespace }}" {{ pod.stdout }} /bin/bash -c 'echo "ALTER USER {{ user }} WITH SUPERUSER;" | /opt/rh/rh-postgresql10/root/usr/bin/psql'

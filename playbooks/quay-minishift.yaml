@@ -18,3 +18,12 @@
         - quay-postgres
         - quay-redis
     - include: ../roles/redis.yaml
+      vars:
+        name: quay-redis
+    - include: ../roles/postgres.yaml
+      vars:
+        name: quay-postgres
+        user: quay
+        password: quay
+        database: quay
+

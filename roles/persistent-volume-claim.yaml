@@ -1,11 +1,14 @@
 ---
 - name: "Check for PVC '{{ name }}'"
   shell:
-    cmd: "oc get pvc -n {{ namespace }} | grep {{ name }}"
+    cmd:
+      oc get pvc -n "{{ namespace }}" | grep "{{ name }}"
+  ignore_errors: yes
   register: result
-- name: "Remove non-backed PVC '{{ name }}'"
-  command: "oc delete pvc -n {{ namespace }} {{ name }}"
-  when: result is failed
+# Manipulating an existing PVC is not allowed
+# - name: "Remove non-backed PVC '{{ name }}'"
+#   command: "oc delete pvc -n {{ namespace }} {{ name }}"
+#   when: result is succeeded
 - name: "PersistentVolumeClaim '{{ name }}'"
   when: result is failed
   k8s:
@@ -24,7 +27,7 @@
             storage: 1Gi
         storageClassName: slow
         selector:
-          name: quay-redis
+          name: "{{ name }}"
 
 
 - name: "Create PVC '{{ name }}'"

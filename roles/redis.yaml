@@ -1,12 +1,15 @@
 ---
-- name: Check for 'quay:rhel7' image
+- name: Check for 'registry.access.redhat.com/rhscl/redis-32-rhel7' image
   shell:
-    cmd: "oc get images -n {{ namespace }} -o jsonpath='{.items[*].dockerImageReference}' | grep registry.access.redhat.com/rhscl/redis-32-rhel7"
+    cmd:
+      "oc get images -n {{ namespace }} -o jsonpath='{.items[*].dockerImageReference}' | grep registry.access.redhat.com/rhscl/redis-32-rhel7"
   ignore_errors: yes
   register: result
 - name: Import redis image
   when: result is failure
   command: "oc import-image openshift/redis:32 --from=registry.access.redhat.com/rhscl/redis-32-rhel7 -n {{ namespace }} --confirm"
+
+# - include: persistent-volume-claim.yaml
 
 - name: Download template 'redis-persistent'
   shell:
@@ -22,20 +25,19 @@
     namespace: "{{ namespace }}"
     src: ../tmp/redis-persistent-template.yaml
 
-- name: Check for DeploymentConfig 'quay-redis'
-  command: "oc get dc -n {{ namespace }} -o jsonpath='{.items[?(.metadata.name==\"quay-redis\")].metadata.name}'"
+- name: "Check for DeploymentConfig '{{ name }}'"
+  shell:
+    cmd:
+      oc get dc -n "{{ namespace }}" -o jsonpath='{.items[?(.metadata.name=="{{ name }}")].metadata.name}' | grep "{{ name }}"
+  ignore_errors: yes
   register: result
 - name: Process Template 'redis-persistent'
-  when: result.stdout != "quay-redis"
+  when: result is failure
   shell:
     cmd:
       "oc process -n {{ namespace }} redis-persistent \
              -p REDIS_PASSWORD=quay \
              -p VOLUME_CAPACITY=1Gi \
-             -p DATABASE_SERVICE_NAME=quay-redis \
+             -p DATABASE_SERVICE_NAME={{ name }} \
              -p MEMORY_LIMIT=512Mi \
          | oc create -n {{ namespace }} -f -"
-
-- include: persistent-volume-claim.yaml
-  vars:
-    name: quay-redis
