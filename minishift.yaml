@@ -537,10 +537,10 @@
                 image: quay.io/thomasmckay/quay:rhel7
                 imagePullPolicy: Always
                 env:
-                  - name: QUAYENTRY
-                    value: config
-                  - name: REDEPLOY
-                    value: 1
+                - name: QUAYENTRY
+                  value: config
+                - name: REDEPLOY
+                  value: 1
                 ports:
                 - containerPort: 80
                   protocol: TCP
