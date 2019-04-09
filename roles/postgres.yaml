@@ -52,7 +52,7 @@
   when: result is succeeded
   shell:
     cmd:
-      oc rsh -n "{{ namespace }}" {{ pod.stdout }} /bin/bash -c 'echo "CREATE EXTENSION pg_trgm" | /opt/rh/rh-postgresql10/root/usr/bin/psql'
+      oc rsh -n "{{ namespace }}" {{ pod.stdout }} /bin/bash -c 'echo "CREATE EXTENSION pg_trgm" | /opt/rh/rh-postgresql10/root/usr/bin/psql -U {{ user }} {{ database }}'
 - name: "Add postgres SUPERUSER permission to Pod '{{ name }}'"
   when: result is succeeded
   shell:
