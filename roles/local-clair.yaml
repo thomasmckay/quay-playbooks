@@ -1,8 +1,8 @@
 ---
 - name: Create clair.yaml
   vars:
-    quay_endpoint: 192.168.1.2
-    clair_endpoint: 192.168.1.2
+    quay_endpoint: thomasmckay-desktop.usersys.redhat.com
+    clair_endpoint: thomasmckay-desktop.usersys.redhat.com
     key_id: 0117333c026c00d4ee8138182cbe100b0e4504b05315888af8f7d80fbeae4da7
   shell:
     cmd: |
@@ -84,6 +84,8 @@
     ports:
       - "6060:6060"
       - "6061:6061"
+    etc_hosts:
+      thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
     keep_volumes: false
     auto_remove: true
     state: started

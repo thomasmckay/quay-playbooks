@@ -7,6 +7,8 @@
       - ~/quay-redis:/var/lib/redis:Z
     ports:
       - "6379:6379"
+    etc_hosts:
+      thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
     keep_volumes: false
     auto_remove: true
     state: started

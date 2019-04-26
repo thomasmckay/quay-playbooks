@@ -6,7 +6,7 @@
 
 - name: Quay Registry container
   docker_container:
-    name: quay-registry
+    name: quay
     image: quay.io/thomasmckay/quay:rhel7
     volumes:
       - ~/quay-config:/conf/stack
@@ -17,6 +17,8 @@
     ports:
       - "80:8080"
       - "443:8443"
+    etc_hosts:
+      thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
     keep_volumes: false
     auto_remove: true
     state: started

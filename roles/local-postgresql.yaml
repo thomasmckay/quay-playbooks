@@ -11,6 +11,8 @@
       POSTGRESQL_DATABASE: quay
     ports:
       - "5432:5432"
+    etc_hosts:
+      thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
     keep_volumes: false
     auto_remove: true
     state: started
