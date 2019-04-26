@@ -1,0 +1,13 @@
+# ansible-playbook "$@" /dev/stdin <<EOF
+# - hosts: localhost
+#   tasks:
+#     - include: `pwd`/roles/local-teardown.yaml
+# EOF
+---
+- name: Tear down setup
+  ignore_errors: yes
+  shell:
+    cmd: |
+      docker kill quay-postgresql quay-redis quay-config quay-registry clair-postgresql clair
+      rm -Rf ~/quay-postgresql ~/quay-config ~/quay-redis ~/quay-storage ~/clair-config ~/clair-postgresql
+      rm -f /tmp/quay/*

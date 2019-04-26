@@ -1,0 +1,84 @@
+---
+- name: Quay Redis storage folder
+  file:
+    path: ~/quay-redis
+    state: directory
+- name: Quay Postgresql storage folder
+  file:
+    path: ~/quay-postgresql
+    state: directory
+- name: Quay storage folder
+  file:
+    path: ~/quay-storage
+    state: directory
+- name: Quay registry folder
+  file:
+    path: ~/quay-config
+    state: directory
+- name: Clair Postgresql storage folder
+  file:
+    path: ~/clair-postgresql
+    state: directory
+- name: Clair Postgresql storage folder
+  file:
+    path: ~/clair-config
+    state: directory
+- name: /tmp working directory
+  file:
+    path: /tmp/quay
+    state: directory
+
+- name: Create TLS cert and key
+  shell:
+    cmd: |
+      openssl genrsa -out /tmp/quay/rootCA.key 2048
+      openssl req -x509 -new -nodes -key /tmp/quay/rootCA.key -sha256 -days 1024 -out /tmp/quay/rootCA.pem -subj '/CN=192.168.1.2'
+
+      cat <<EOF > /tmp/quay/openssl.conf
+      [req]
+      req_extensions = v3_req
+      distinguished_name = req_distinguished_name
+      [req_distinguished_name]
+      [ v3_req ]
+      basicConstraints = CA:FALSE
+      keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+      subjectAltName = @alt_names
+      [alt_names]
+      DNS.1 = 192.168.1.2
+      IP.1 = 192.168.1.2
+      EOF
+
+      openssl genrsa -out /tmp/quay/quay.key 2048
+      openssl req -new -key /tmp/quay/quay.key -out /tmp/quay/quay.csr -subj "/CN=192.168.1.2" -config /tmp/quay/openssl.conf
+      openssl x509 -req -in /tmp/quay/quay.csr -CA /tmp/quay/rootCA.pem -CAkey /tmp/quay/rootCA.key -CAcreateserial -out /tmp/quay/quay.cert -days 356 -extensions v3_req -extfile /tmp/quay/openssl.conf
+
+      openssl genrsa -out /tmp/quay/clair.key 2048
+      openssl req -new -key /tmp/quay/clair.key -out /tmp/quay/clair.csr -subj "/CN=192.168.1.2" -config /tmp/quay/openssl.conf
+      openssl x509 -req -in /tmp/quay/clair.csr -CA /tmp/quay/rootCA.pem -CAkey /tmp/quay/rootCA.key -CAcreateserial -out /tmp/quay/clair.cert -days 356 -extensions v3_req -extfile /tmp/quay/openssl.conf
+
+# Single shared cert
+cat >> /tmp/quay/single.conf <<EOF
+[ req ]
+prompt = no
+distinguished_name = req_distinguished_name
+[ req_distinguished_name ]
+C = US
+ST = NY
+L = Cazenovia
+O = Red Hat
+OU = Quay
+CN = 192.168.1.2
+emailAddress = thomasmckay@redhat.com
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+subjectAltName = @alt_names
+[alt_names]
+DNS.1 = IP:192.168.1.2
+IP.1 = IP:192.168.1.2
+EOF
+
+openssl req -new -newkey rsa:4096 -x509 -sha256 -days 365 -nodes -out /tmp/quay/single.cert -keyout /tmp/quay/single.key -config /tmp/quay/single.conf
+cp /tmp/quay/single.cert ~/quay-config/ssl.cert
+cp /tmp/quay/single.key ~/quay-config/ssl.key
+cp /tmp/quay/single.cert ~/quay-builder/ssl.cert

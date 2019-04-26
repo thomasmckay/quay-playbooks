@@ -124,14 +124,14 @@
             volumes:
               - name: configvolume
                 projected:
-                  defaultMode: 750
+                  defaultMode: 0400
                   sources:
                   - secret:
                       name: clair-config-secret
                       path: config.yaml
               - name: certsvolume
                 projected:
-                  defaultMode: 750
+                  defaultMode: 0400
                   sources:
                   - secret:
                       name: clair-cert-secret
@@ -151,15 +151,10 @@
               volumeMounts:
               - name: configvolume
                 readOnly: false
-                mountPath: /etc/clair
+                mountPath: /clair/config
               - name: certsvolume
                 readOnly: false
-                mountPath: /certs
+                mountPath: /clair/certs
             imagePullSecrets:
               - name: quay-pull-secret
       EOF
-
-- name: Check for 'clair-jwt:v2.0.8' image
-  tags: [clair-redeploy]
-  shell:
-    cmd: oc set env deployment/clair -n {{ namespace }} REDEPLOY={{ ansible_date_time.iso8601 }}
