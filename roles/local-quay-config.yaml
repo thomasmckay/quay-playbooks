@@ -15,8 +15,8 @@
       QUAYENTRY: config
       CONFIG_APP_PASSWORD: password
     ports:
-      - "8080:8080"
-      - "8443:8443"
+      - "9080:8080"
+      - "9443:8443"
     etc_hosts:
       thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
     keep_volumes: false

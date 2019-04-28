@@ -3,13 +3,11 @@
   vars:
     quay_endpoint: thomasmckay-desktop.usersys.redhat.com
     clair_endpoint: thomasmckay-desktop.usersys.redhat.com
-    key_id: 0117333c026c00d4ee8138182cbe100b0e4504b05315888af8f7d80fbeae4da7
+    key_id: 0761232701f8b634dd86164138076702c34c44d81a9df3ed746a43985d09ad0a
   shell:
     cmd: |
-      # cp /tmp/quay/clair.cert ~/clair-config/clair.cert
-      # cp /tmp/quay/clair.key ~/clair-config/clair.key
-      cp /tmp/quay/single.cert ~/clair-config/clair.cert
-      cp /tmp/quay/single.key ~/clair-config/clair.key
+      cp /tmp/quay/rootCA.crt ~/clair-certs/rootCA.crt
+      cp /tmp/quay/{{key_id}}.pem ~/clair-config/security_scanner.pem
       cat <<EOF > ~/clair-config/config.yaml
       clair:
         database:
@@ -53,7 +51,7 @@
         - enabled: true
           listen_addr: :6060
           key_file: /clair/config/clair.key
-          crt_file: /clair/config/clair.cert
+          crt_file: /clair/config/clair.crt
           verifier:
             audience: https://{{ clair_endpoint }}:6060
             upstream: http://localhost:6062
@@ -68,14 +66,21 @@
     cmd: |
       docker pull quay.io/thomasmckay/clair-jwt:rhel7
 
+- name: Postgresql 'clair' database
+  shell:
+    cmd: |
+      docker exec quay-postgresql bash -l -c 'createdb clair'
+  register: result
+  ignore_errors: yes
 
-- name: Clair Postgresql container
+
+- name: Clair container
   docker_container:
     name: clair
     image: quay.io/thomasmckay/clair-jwt:rhel7
     volumes:
       - ~/clair-config:/clair/config:Z
-      - /tmp/quay/single.cert:/etc/pki/ca-trust/source/anchors/ca.crt
+      - /tmp/quay/rootCA.crt:/etc/pki/ca-trust/source/anchors/rootCA.crt
       # - /tmp/quay/clair.cert:/etc/pki/ca-trust/source/anchors/clair.crt
       # - /tmp/quay/rootCA.pem:/etc/pki/ca-trust/source/anchors/ca.crt
       #- ~/clair-config/config.yaml:/config/config.yaml
