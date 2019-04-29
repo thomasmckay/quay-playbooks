@@ -77,6 +77,7 @@
 
 
 - name: Clair container
+  tags: [all, restart]
   docker_container:
     name: clair
     image: quay.io/thomasmckay/clair-jwt:rhel7
@@ -93,6 +94,7 @@
       - "6061:6061"
     etc_hosts:
       thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+    network_mode: host
     keep_volumes: false
     auto_remove: true
     state: started
