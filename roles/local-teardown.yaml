@@ -1,5 +1,6 @@
 # ansible-playbook "$@" /dev/stdin <<EOF
 # - hosts: localhost
+#   become: user
 #   tasks:
 #     - include: `pwd`/roles/local-quay.yaml
 # EOF

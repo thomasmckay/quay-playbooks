@@ -8,6 +8,8 @@
     cmd: |
       cp /tmp/quay/rootCA.crt ~/clair-certs/rootCA.crt
       cp /tmp/quay/{{key_id}}.pem ~/clair-config/security_scanner.pem
+      cp /tmp/quay/clair.crt ~/clair-config
+      cp /tmp/quay/clair.key ~/clair-config
       cat <<EOF > ~/clair-config/config.yaml
       clair:
         database:

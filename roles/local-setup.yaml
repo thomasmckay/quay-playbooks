@@ -37,8 +37,6 @@
     cmd: |
       # Root CA
       openssl genrsa -out /tmp/quay/rootCA.key 4096
-      #openssl req -new -x509 -key /tmp/quay/rootCA.key -out /tmp/quay/rootCA.crt \
-      #    -days 365 -extensions v3_ca -subj "/CN=Quay"
       openssl req -x509 -new -nodes -key /tmp/quay/rootCA.key -sha256 -days 365 \
           -out /tmp/quay/rootCA.crt -subj '/CN=Quay'
 
@@ -55,7 +53,6 @@
           -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=thomasmckay-desktop.usersys.redhat.com"
       openssl x509 -req -days 365 -in /tmp/quay/clair.csr -out /tmp/quay/clair.crt \
           -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key -CAcreateserial
-
 
       # openssl genrsa -out /tmp/quay/rootCA.key 2048
       # openssl req -x509 -new -nodes -key /tmp/quay/rootCA.key -sha256 -days 1024 -out /tmp/quay/rootCA.pem -subj '/CN=192.168.1.2'
