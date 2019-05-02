@@ -1,13 +1,17 @@
 ---
 - name: Pull latest image
+  tags: [all, restart]
   shell:
     cmd: |
-      docker pull quay.io/thomasmckay/quay:rhel7
+      #docker pull quay.io/thomasmckay/quay:rhel7
+      docker pull quay.io/quay/quay:v3-rc4-db404c3
 
 - name: Quay Registry container
+  tags: [all, restart]
   docker_container:
     name: quay
-    image: quay.io/thomasmckay/quay:rhel7
+    #image: quay.io/thomasmckay/quay:rhel7
+    image: quay.io/quay/quay:v3-rc4-db404c3
     volumes:
       - ~/quay-config:/conf/stack
       - ~/quay-storage:/datastorage
