@@ -49,7 +49,7 @@
             name: quay-enterprise-config-secret
           EOF
 
-    - include: ../roles/certs.yaml
+    #- include: ../roles/certs.yaml
 
     - name: Check for Secret 'quay-pull-secret'
       command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-pull-secret")].metadata.name}'

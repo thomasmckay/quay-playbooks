@@ -5,32 +5,28 @@
 
 - name: Create TLS cert and key
   when: result.stdout != "quay-enterprise-cert-secret"
+  vars:
+    tmpdir: tmp
   shell:
     cmd: |
-      openssl genrsa -out tmp/rootCA.key 2048
-      openssl req -x509 -new -nodes -key tmp/rootCA.key -sha256 -days 1024 -out tmp/rootCA.pem -subj '/CN=*.`minishift ip`.nip.io'
+      # Root CA
+      openssl genrsa -out {{ tmpdir }}/rootCA.key 4096
+      openssl req -x509 -new -nodes -key {{ tmpdir }}/rootCA.key -sha256 -days 365 \
+          -out {{ tmpdir }}/rootCA.crt -subj '/CN=Quay'
 
-      cat <<EOF > tmp/openssl.conf
-      [req]
-      req_extensions = v3_req
-      distinguished_name = req_distinguished_name
-      [req_distinguished_name]
-      [ v3_req ]
-      basicConstraints = CA:FALSE
-      keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-      subjectAltName = @alt_names
-      [alt_names]
-      DNS.1 = *.`minishift ip`.nip.io
-      IP.1 = `minishift ip`
-      EOF
+      # Quay server
+      openssl genrsa -out {{ tmpdir }}/quay.key 4096
+      openssl req -new -key {{ tmpdir }}/quay.key -out {{ tmpdir }}/quay.csr \
+          -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=*.`minishift ip`.nip.io"
+      openssl x509 -req -days 365 -in {{ tmpdir }}/quay.csr -out {{ tmpdir }}/quay.crt \
+          -CA {{ tmpdir }}/rootCA.crt -CAkey {{ tmpdir }}/rootCA.key -CAcreateserial
 
-      openssl genrsa -out tmp/quay.key 2048
-      openssl req -new -key tmp/quay.key -out tmp/quay.csr -subj "/CN=*.`minishift ip`.nip.io" -config tmp/openssl.conf
-      openssl x509 -req -in tmp/quay.csr -CA tmp/rootCA.pem -CAkey tmp/rootCA.key -CAcreateserial -out tmp/quay.cert -days 356 -extensions v3_req -extfile tmp/openssl.conf
-
-      openssl genrsa -out tmp/clair.key 2048
-      openssl req -new -key tmp/clair.key -out tmp/clair.csr -subj "/CN=*.`minishift ip`.nip.io" -config tmp/openssl.conf
-      openssl x509 -req -in tmp/clair.csr -CA tmp/rootCA.pem -CAkey tmp/rootCA.key -CAcreateserial -out tmp/clair.cert -days 356 -extensions v3_req -extfile tmp/openssl.conf
+      # Clair server
+      openssl genrsa -out {{ tmpdir }}/clair.key 4096
+      openssl req -new -key {{ tmpdir }}/clair.key -out {{ tmpdir }}/clair.csr \
+          -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=*.`minishift ip`.nip.io"
+      openssl x509 -req -days 365 -in {{ tmpdir }}/clair.csr -out {{ tmpdir }}/clair.crt \
+          -CA {{ tmpdir }}/rootCA.crt -CAkey {{ tmpdir }}/rootCA.key -CAcreateserial
 
 # Quay
 #
@@ -39,18 +35,18 @@
   shell:
     cmd: |
       oc adm ca create-server-cert \
-        --signer-cert=tmp/minishift.crt \
-        --signer-key=tmp/minishift.key \
-        --signer-serial=tmp/minishift.serial.txt \
+        --signer-cert=tmp/rootCA.crt \
+        --signer-key=tmp/rootCA.key \
+        --signer-serial=tmp/rootCA.srl \
         --hostnames="`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.host}'`,`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.host}'`" \
-        --cert=tmp/quay.cert \
+        --cert=tmp/quay.crt \
         --key=tmp/quay.key
 - name: Create secret 'quay-enterprise-cert-secret'
   when: result.stdout != "quay-enterprise-cert-secret"
   shell:
     cmd: |
       oc create secret generic quay-enterprise-cert-secret \
-         --from-file=ssl.cert=tmp/quay.cert --from-file=ssl.key=tmp/quay.key -n quay-enterprise
+         --from-file=ssl.cert=tmp/quay.crt --from-file=ssl.key=tmp/quay.key -n quay-enterprise
 
 # Clair
 #
@@ -62,15 +58,15 @@
 #   shell:
 #     cmd: |
 #       oc adm ca create-server-cert \
-#         --signer-cert=tmp/minishift.crt \
-#         --signer-key=tmp/minishift.key \
-#         --signer-serial=tmp/minishift.serial.txt \
+#         --signer-cert=tmp/rootCA.crt \
+#         --signer-key=tmp/rootCA.key \
+#         --signer-serial=tmp/rootCA.crl \
 #         --hostnames="`oc get services -n quay-enterprise -o jsonpath=`oc get services -n clair -o jsonpath='{.items[?(@.metadata.name==\"clair\")].spec.clusterIP}'`" \
-#         --cert=tmp/clair.cert \
+#         --cert=tmp/clair.crt \
 #         --key=tmp/clair.key
 - name: Create secret 'clair-cert-secret'
   when: result.stdout != "clair-cert-secret"
   shell:
     cmd: |
       oc create secret generic clair-cert-secret \
-         --from-file=ssl.cert=tmp/clair.cert --from-file=ssl.key=tmp/clair.key -n quay-enterprise
+         --from-file=ssl.cert=tmp/clair.crt --from-file=ssl.key=tmp/clair.key -n quay-enterprise
