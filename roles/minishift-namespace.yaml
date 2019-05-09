@@ -1,0 +1,7 @@
+---
+- name: "Namespace {{ namespace }}"
+  k8s:
+    kind: Namespace
+    state: present
+    api_version: v1
+    name: "{{ namespace }}"

@@ -57,7 +57,7 @@
             private_key:
               type: preshared
               options:
-                key_id: {{ key_id }}
+                key_id: {{ key_id.stdout }}
                 private_key_path: /clair/config/security_scanner.pem
         verifier_proxies:
         - enabled: true
