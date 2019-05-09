@@ -6,7 +6,7 @@
 - name: Create TLS cert and key
   when: result.stdout != "quay-enterprise-cert-secret"
   vars:
-    tmpdir: tmp
+    tmpdir: /home/thomasmckay/code/operators/quay-operator/playbooks/tmp
   shell:
     cmd: |
       # Root CA
@@ -30,27 +30,31 @@
 
 # Quay
 #
-- name: Create Quay server cert
-  when: result.stdout != "quay-enterprise-cert-secret"
-  shell:
-    cmd: |
-      oc adm ca create-server-cert \
-        --signer-cert=tmp/rootCA.crt \
-        --signer-key=tmp/rootCA.key \
-        --signer-serial=tmp/rootCA.srl \
-        --hostnames="`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.host}'`,`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.host}'`" \
-        --cert=tmp/quay.crt \
-        --key=tmp/quay.key
+# - name: Create Quay server cert
+#   vars:
+#     tmpdir: /home/thomasmckay/code/operators/quay-operator/playbooks/tmp
+#   when: result.stdout != "quay-enterprise-cert-secret"
+#   shell:
+#     cmd: |
+#       oc adm ca create-server-cert \
+#         --signer-cert={{ tmpdir }}/rootCA.crt \
+#         --signer-key={{ tmpdir }}/rootCA.key \
+#         --signer-serial={{ tmpdir }}/rootCA.srl \
+#         --hostnames="`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.host}'`,`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.host}'`" \
+#         --cert={{ tmpdir }}/quay.crt \
+#         --key={{ tmpdir }}/quay.key
 - name: Create secret 'quay-enterprise-cert-secret'
   when: result.stdout != "quay-enterprise-cert-secret"
   shell:
     cmd: |
       oc create secret generic quay-enterprise-cert-secret \
-         --from-file=ssl.cert=tmp/quay.crt --from-file=ssl.key=tmp/quay.key -n quay-enterprise
+         --from-file=ssl.cert={{ tmpdir }}/quay.crt --from-file=ssl.key={{ tmpdir }}/quay.key -n quay-enterprise
 
 # Clair
 #
 - name: Check for Secret 'clair-cert-secret'
+  vars:
+    tmpdir: /home/thomasmckay/code/operators/quay-operator/playbooks/tmp
   command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-cert-secret")].metadata.name}'
   register: result
 # - name: Create Clair server cert
@@ -58,15 +62,17 @@
 #   shell:
 #     cmd: |
 #       oc adm ca create-server-cert \
-#         --signer-cert=tmp/rootCA.crt \
-#         --signer-key=tmp/rootCA.key \
-#         --signer-serial=tmp/rootCA.crl \
+#         --signer-cert={{ tmpdir }}/rootCA.crt \
+#         --signer-key={{ tmpdir }}/rootCA.key \
+#         --signer-serial={{ tmpdir }}/rootCA.crl \
 #         --hostnames="`oc get services -n quay-enterprise -o jsonpath=`oc get services -n clair -o jsonpath='{.items[?(@.metadata.name==\"clair\")].spec.clusterIP}'`" \
-#         --cert=tmp/clair.crt \
-#         --key=tmp/clair.key
+#         --cert={{ tmpdir }}/clair.crt \
+#         --key={{ tmpdir }}/clair.key
 - name: Create secret 'clair-cert-secret'
+  vars:
+    tmpdir: /home/thomasmckay/code/operators/quay-operator/playbooks/tmp
   when: result.stdout != "clair-cert-secret"
   shell:
     cmd: |
       oc create secret generic clair-cert-secret \
-         --from-file=ssl.cert=tmp/clair.crt --from-file=ssl.key=tmp/clair.key -n quay-enterprise
+         --from-file=ssl.cert={{ tmpdir }}/clair.crt --from-file=ssl.key={{ tmpdir }}/clair.key -n quay-enterprise

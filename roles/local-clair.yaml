@@ -1,13 +1,23 @@
 ---
+- name: Determine security_scanner key ID
+  shell:
+    cmd: |
+      docker exec quay-postgresql bash -l -c 'echo "select kid,service from servicekey;" | psql quay' | grep security_scanner | awk '{print $1}'
+  register: key_id
+
+- name: Put security_scanner.pem in place
+  shell:
+    cmd: |
+      cp ~/quay-config/security_scanner.pem ~/clair-config/
+
 - name: Create clair.yaml
   vars:
     quay_endpoint: thomasmckay-desktop.usersys.redhat.com
     clair_endpoint: thomasmckay-desktop.usersys.redhat.com
-    key_id: 0761232701f8b634dd86164138076702c34c44d81a9df3ed746a43985d09ad0a
   shell:
     cmd: |
       cp /tmp/quay/rootCA.crt ~/clair-certs/rootCA.crt
-      cp /tmp/quay/{{key_id}}.pem ~/clair-config/security_scanner.pem
+      cp ~/quay-config/security_scanner.pem ~/clair-config/security_scanner.pem
       cp /tmp/quay/clair.crt ~/clair-config
       cp /tmp/quay/clair.key ~/clair-config
       cat <<EOF > ~/clair-config/config.yaml

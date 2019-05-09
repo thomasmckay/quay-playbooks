@@ -11,24 +11,24 @@
   vars:
     namespace: quay-enterprise
   tasks:
-    - include: ../roles/namespace.yaml
-    - include: ../roles/persistent-volume.yaml
+    - include: ../roles/minishift-namespace.yaml
+    - include: ../roles/minishift-persistent-volume.yaml
       vars:
         name: "{{ item }}"
       loop:
         - quay-postgres
         - quay-redis
         - clair-postgres
-    - include: ../roles/redis.yaml
+    - include: ../roles/minishift-redis.yaml
       vars:
         name: quay-redis
-    - include: ../roles/postgres.yaml
+    - include: ../roles/minishift-postgres.yaml
       vars:
         name: quay-postgres
         user: quay
         password: quay
         database: quay
-    - include: ../roles/postgres.yaml
+    - include: ../roles/minishift-postgres.yaml
       vars:
         name: clair-postgres
         user: clair
@@ -49,7 +49,7 @@
             name: quay-enterprise-config-secret
           EOF
 
-    #- include: ../roles/certs.yaml
+    - include: ../roles/certs.yaml
 
     - name: Check for Secret 'quay-pull-secret'
       command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-pull-secret")].metadata.name}'
@@ -69,7 +69,7 @@
       register: result
     - name: Import image 'quay:rhel7'
       when: result is failure
-      command: oc import-image quay:rhel7 --from=quay.io/thomasmckay/quay:rhel7 -n quay-enterprise --confirm
+      command: oc import-image quay:v3.0.0 --from=quay.io/redhat/quay:v3.0.0 -n quay-enterprise --confirm
 
     - name: Check for Role 'quay-enterprise-serviceaccount'
       command: oc get roles -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-serviceaccount")].metadata.name}'
@@ -164,7 +164,7 @@
                 volumes:
                   - name: configvolume
                     projected:
-                      defaultMode: 750
+                      defaultMode: 0777
                       sources:
                       - secret:
                           name: quay-enterprise-config-secret
@@ -173,7 +173,7 @@
                           name: quay-enterprise-cert-secret
                 containers:
                 - name: quay-enterprise
-                  image: quay.io/thomasmckay/quay:rhel7
+                  image: quay.io/redhat/quay:v3.0.0
                   imagePullPolicy: Always
                   env:
                     - name: QUAYENTRY
@@ -277,7 +277,7 @@
                 volumes:
                   - name: configvolume
                     projected:
-                      defaultMode: 750
+                      defaultMode: 0777
                       sources:
                       - secret:
                           name: quay-enterprise-config-secret
@@ -286,7 +286,7 @@
                           name: quay-enterprise-cert-secret
                 containers:
                 - name: quay-enterprise
-                  image: quay.io/thomasmckay/quay:rhel7
+                  image: quay.io/redhat/quay:v3.0.0
                   imagePullPolicy: Always
                   env:
                     - name: QUAYENTRY
@@ -480,7 +480,7 @@
                 containers:
                 - name: quay-enterprise
                   #image: quay.io/thomasmckay/clair:rhel7
-                  image: quay.io/coreos/clair-jwt:v2.0.8
+                  image: quay.io/redhat/clair-jwt:v3.0.0
                   imagePullPolicy: Always
                   ports:
                   - containerPort: 6060

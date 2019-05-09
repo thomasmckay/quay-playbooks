@@ -45,14 +45,16 @@
       openssl req -new -key /tmp/quay/quay.key -out /tmp/quay/quay.csr \
           -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=thomasmckay-desktop.usersys.redhat.com"
       openssl x509 -req -days 365 -in /tmp/quay/quay.csr -out /tmp/quay/quay.crt \
-          -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key -CAcreateserial
+          -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key -CAcreateserial \
+          -extensions v3_req -extfile /etc/pki/tls/openssl.cnf
 
       # Clair server
       openssl genrsa -out /tmp/quay/clair.key 4096
       openssl req -new -key /tmp/quay/clair.key -out /tmp/quay/clair.csr \
           -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=thomasmckay-desktop.usersys.redhat.com"
       openssl x509 -req -days 365 -in /tmp/quay/clair.csr -out /tmp/quay/clair.crt \
-          -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key -CAcreateserial
+          -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key -CAcreateserial \
+          -extensions v3_req -extfile /etc/pki/tls/openssl.cnf
 
       # openssl genrsa -out /tmp/quay/rootCA.key 2048
       # openssl req -x509 -new -nodes -key /tmp/quay/rootCA.key -sha256 -days 1024 -out /tmp/quay/rootCA.pem -subj '/CN=192.168.1.2'
@@ -106,6 +108,10 @@
       # cp /tmp/quay/single.key ~/quay-config/ssl.key
       # cp /tmp/quay/single.cert ~/quay-builder/ssl.cert
 
-cp rootCA /etc/pki/ca-trust/source/anchors
-update-ca-trust extract
-systemctl restart docker.service
+
+- name: Create TLS cert and key
+  shell:
+    cmd: |
+      cp rootCA /etc/pki/ca-trust/source/anchors
+      update-ca-trust extract
+      systemctl restart docker.service
