@@ -130,9 +130,9 @@
       # cp /tmp/quay/single.cert ~/quay-builder/ssl.cert
 
 
-- name: Create TLS cert and key
+- name: Install rootCA and restart docker.service
   shell:
     cmd: |
-      cp /tmp/quay/rootCA.crt /etc/pki/ca-trust/source/anchors
-      update-ca-trust extract
-      systemctl restart docker.service
+      sudo cp /tmp/quay/rootCA.crt /etc/pki/ca-trust/source/anchors
+      sudo update-ca-trust extract
+      sudo systemctl restart docker.service

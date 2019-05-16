@@ -3,15 +3,13 @@
   tags: [all, restart]
   shell:
     cmd: |
-      #docker pull quay.io/thomasmckay/quay:rhel7
-      docker pull quay.io/quay/quay:v3.0.1-rc1-c6e386c
+      docker pull {{ quay_image }}
 
 - name: Quay Registry container
   tags: [all, restart]
   docker_container:
     name: quay
-    #image: quay.io/thomasmckay/quay:rhel7
-    image: quay.io/quay/quay:v3.0.1-rc1-c6e386c
+    image:  "{{ quay_image }}"
     volumes:
       - ~/quay-config:/conf/stack
       - ~/quay-storage:/datastorage

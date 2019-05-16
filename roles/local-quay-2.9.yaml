@@ -1,28 +1,30 @@
 ---
 - name: Pull latest image
+  tags: [all, restart]
   shell:
     cmd: |
-      docker pull {{ quay_image }}
+      docker pull quay.io/coreos/quay:v2.9.5
 
-- name: Quay Config container
+- name: Quay Registry container
+  tags: [all, restart]
   docker_container:
-    name: quay-config
-    image: "{{ quay_image }}"
+    name: quay
+    image: quay.io/coreos/quay:v2.9.5
     volumes:
       - ~/quay-config:/conf/stack
       - ~/quay-storage:/datastorage
     env:
-      QUAYENTRY: config
-      CONFIG_APP_PASSWORD: password
+      DEBUGLOG: "true"
     ports:
-      - "9080:8080"
-      - "9443:8443"
+      - "80:80"
+      - "443:443"
     etc_hosts:
       thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
     keep_volumes: false
     auto_remove: true
     state: started
     restart: true
+    privileged: true
   register: result
   until: result is succeeded
   retries: 5

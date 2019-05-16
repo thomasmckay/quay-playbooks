@@ -74,9 +74,10 @@
       EOF
 
 - name: Pull latest image
+  tags: [all, restart]
   shell:
     cmd: |
-      docker pull quay.io/thomasmckay/clair-jwt:rhel7
+      docker pull {{ clair_image }}
 
 - name: Postgresql 'clair' database
   shell:
@@ -90,7 +91,7 @@
   tags: [all, restart]
   docker_container:
     name: clair
-    image: quay.io/thomasmckay/clair-jwt:rhel7
+    image: "{{ clair_image }}"
     volumes:
       - ~/clair-config:/clair/config:Z
       - /tmp/quay/rootCA.crt:/etc/pki/ca-trust/source/anchors/rootCA.crt

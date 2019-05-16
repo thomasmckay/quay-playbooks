@@ -1,8 +1,12 @@
-# ansible-playbook "$@" /dev/stdin <<EOF
-# - hosts: localhost
-#   become: user
+# ansible-playbook -i "devel.example.com," -e ansible_python_interpreter=/home/vagrant/code/operators/quay-operator/.venv/bin/python "$@" /dev/stdin <<EOF
+# - hosts: devel.example.com
+#   become: vagrant
+#   vars:
+#     quay_image: quay.io/redhat/quay:v3.0.1
+#     clair_image: quay.io/redhat/clair-jwt:v3.0.1
+#     build_image: quay.io/redhat/quay-builder:v3.0.1
 #   tasks:
-#     - include: `pwd`/roles/local-quay.yaml
+#     - include: `pwd`/roles/local-teardown.yaml
 # EOF
 ---
 - name: Tear down setup
