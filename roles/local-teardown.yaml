@@ -10,6 +10,7 @@
 # EOF
 ---
 - name: Tear down setup
+  tags: [teardown, full-setup]
   ignore_errors: yes
   shell:
     cmd: |

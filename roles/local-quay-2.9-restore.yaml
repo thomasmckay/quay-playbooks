@@ -1,0 +1,12 @@
+---
+- name: Recreate database
+  shell:
+    cmd: |
+      docker exec quay-postgresql bash -l -c 'dropdb quay && createdb quay'
+
+- name: Restore config and postgresql
+  shell:
+    cmd: |
+      cp ~/quay-backup/config.yaml ~/quay-config/config.yaml
+      cp -R ~/quay-backup/storage ~/quay-storage
+      cat ~/quay-backup/backup.psql | docker exec -i quay-postgresql bash -l -c 'psql -d quay'
