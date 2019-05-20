@@ -1,0 +1,116 @@
+---
+- name: Determine security_scanner key ID
+  shell:
+    cmd: |
+      docker exec quay-postgresql bash -l -c 'echo "select kid,service from servicekey;" | psql quay' | grep security_scanner | awk '{print $1}'
+  register: key_id
+
+- name: Put security_scanner.pem in place
+  shell:
+    cmd: |
+      cp ~/quay-config/security_scanner.pem ~/clair-config/
+
+- name: Create clair.yaml
+  vars:
+    quay_endpoint: thomasmckay-desktop.usersys.redhat.com
+    clair_endpoint: thomasmckay-desktop.usersys.redhat.com
+  shell:
+    cmd: |
+      cp /tmp/quay/rootCA.crt ~/clair-certs/rootCA.crt
+      cp ~/quay-config/security_scanner.pem ~/clair-config/security_scanner.pem
+      cp /tmp/quay/clair.crt ~/clair-config
+      cp /tmp/quay/clair.key ~/clair-config
+      cat <<EOF > ~/clair-config/config.yaml
+      clair:
+        database:
+          type: pgsql
+          options:
+            source: postgresql://quay:quay@{{ clair_endpoint }}:5432/clair?sslmode=disable
+            cachesize: 16384
+        api:
+          healthport: 6061
+          port: 6062
+          timeout: 900s
+          paginationkey: "XxoPtCUzrUv4JV5dS+yQ+MdW7yLEJnRMwigVY/bpgtQ="
+        updater:
+          interval: 6h
+          enabledupdaters:
+          - rhel
+          - alpine
+          notifier:
+            attempts: 3
+            renotifyinterval: 1h
+            http:
+              endpoint: https://{{ quay_endpoint }}/secscan/notify
+              proxy: http://localhost:6063
+      jwtproxy:
+        signer_proxy:
+          enabled: true
+          listen_addr: :6063
+          ca_key_file: /certificates/mitm.key
+          ca_crt_file: /certificates/mitm.crt
+          signer:
+            issuer: security_scanner
+            expiration_time: 5m
+            max_skew: 1m
+            nonce_length: 32
+            private_key:
+              type: preshared
+              options:
+                key_id: {{ key_id.stdout }}
+                private_key_path: /clair/config/security_scanner.pem
+        verifier_proxies:
+        - enabled: true
+          listen_addr: :6060
+          key_file: /clair/config/clair.key
+          crt_file: /clair/config/clair.crt
+          verifier:
+            audience: https://{{ clair_endpoint }}:6060
+            upstream: http://localhost:6062
+            key_server:
+              type: keyregistry
+              options:
+                registry: https://{{ quay_endpoint }}/keys/
+      EOF
+
+- name: Pull latest image
+  tags: [all, restart]
+  shell:
+    cmd: |
+      docker pull {{ clair_image }}
+
+- name: Postgresql 'clair' database
+  shell:
+    cmd: |
+      docker exec quay-postgresql bash -l -c 'createdb clair'
+  register: result
+  ignore_errors: yes
+
+
+- name: Clair container
+  tags: [all, restart]
+  docker_container:
+    name: clair
+    image: "{{ clair_image }}"
+    volumes:
+      - ~/clair-config:/clair/config:Z
+      - /tmp/quay/rootCA.crt:/etc/pki/ca-trust/source/anchors/rootCA.crt
+      # - /tmp/quay/clair.cert:/etc/pki/ca-trust/source/anchors/clair.crt
+      # - /tmp/quay/rootCA.pem:/etc/pki/ca-trust/source/anchors/ca.crt
+      #- ~/clair-config/config.yaml:/config/config.yaml
+      #- ~/clair-config:/clair/config:Z
+      # - /tmp/quay/clair.cert:/usr/local/share/ca-certificates/ca.crt
+    ports:
+      - "6060:6060"
+      - "6061:6061"
+    etc_hosts:
+      thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+    network_mode: host
+    keep_volumes: false
+    auto_remove: true
+    state: started
+    restart: true
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 10

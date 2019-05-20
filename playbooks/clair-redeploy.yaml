@@ -1,0 +1,7 @@
+- hosts: localhost
+  vars:
+    namespace: quay-enterprise
+  tasks:
+    - name: Redeploy 'clair'
+      shell:
+        cmd: oc set env deployment/clair -n {{ namespace }} REDEPLOY={{ ansible_date_time.iso8601 }}

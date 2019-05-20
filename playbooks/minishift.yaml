@@ -1,0 +1,15 @@
+########
+# To restart minishift:
+#
+#    ansible-playbook playbooks/minishift.yaml
+#
+- hosts: localhost
+  tasks:
+  - name: minishift
+    shell:
+      cmd: |
+        minishift delete --clear-cache --force && rm -rf ~/.minishift ~/.kube/* && \
+        minishift start --memory=12Gb && \
+        minishift addons apply admin-user && \
+        oc login -u system:admin && \
+        minishift console

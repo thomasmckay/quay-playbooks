@@ -1,0 +1,8 @@
+---
+- name: Install config
+  shell:
+    cmd: |
+      mv ~/Downloads/quay-config.tar.gz ~/quay-config/quay-config.tar.gz
+      tar xvf ~/quay-config/quay-config.tar.gz -C ~/quay-config
+      mv ~/Downloads/security_scanner.pem ~/quay-config
+

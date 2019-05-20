@@ -3,4 +3,5 @@ kind: Quay
 metadata:
   name: quay-enterprise
 spec:
-  size: 2
+  size: 1
+  name: quay-enterprise

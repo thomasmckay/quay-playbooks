@@ -1,0 +1,138 @@
+---
+- name: Quay Redis storage folder
+  file:
+    path: ~/quay-redis
+    state: directory
+- name: Quay Postgresql storage folder
+  file:
+    path: ~/quay-postgresql
+    state: directory
+- name: Quay storage folder
+  file:
+    path: ~/quay-storage
+    state: directory
+- name: Quay registry folder
+  file:
+    path: ~/quay-config
+    state: directory
+- name: Clair Postgresql storage folder
+  file:
+    path: ~/clair-postgresql
+    state: directory
+- name: Clair Postgresql storage folder
+  file:
+    path: ~/clair-config
+    state: directory
+- name: Clair Postgresql storage folder
+  file:
+    path: ~/quay-builder
+    state: directory
+- name: /tmp working directory
+  file:
+    path: /tmp/quay
+    state: directory
+
+- name: Create TLS cert and key
+  shell:
+    cmd: |
+      # Root CA
+      openssl genrsa -out /tmp/quay/rootCA.key 4096
+      openssl req -new -x509 -key /tmp/quay/rootCA.key -out /tmp/quay/rootCA.crt \
+          -days 365 -extensions v3_ca -subj "/C=US/L=Syracuse/CN=Quay"
+
+      # Quay server
+      openssl genrsa -out /tmp/quay/quay.key 4096
+      openssl req -new -key /tmp/quay/quay.key -out /tmp/quay/quay.csr \
+          -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=thomasmckay-desktop.usersys.redhat.com"
+      openssl x509 -req -days 365 -in /tmp/quay/quay.csr -out /tmp/quay/quay.crt \
+          -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key \
+          -CAcreateserial -extensions v3_req -extfile /etc/pki/tls/openssl.cnf
+
+      # Clair server
+      openssl genrsa -out /tmp/quay/clair.key 4096
+      openssl req -new -key /tmp/quay/clair.key -out /tmp/quay/clair.csr \
+          -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=thomasmckay-desktop.usersys.redhat.com"
+      openssl x509 -req -days 365 -in /tmp/quay/clair.csr -out /tmp/quay/clair.crt \
+          -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key \
+          -CAcreateserial -extensions v3_req -extfile /etc/pki/tls/openssl.cnf
+
+      ## # Root CA
+      ## openssl genrsa -out /tmp/quay/rootCA.key 4096
+      ## openssl req -x509 -new -nodes -key /tmp/quay/rootCA.key -sha256 -days 365 \
+      ##     -out /tmp/quay/rootCA.crt -subj '/CN=Quay'
+
+      ## # Quay server
+      ## openssl genrsa -out /tmp/quay/quay.key 4096
+      ## openssl req -new -key /tmp/quay/quay.key -out /tmp/quay/quay.csr \
+      ##     -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=thomasmckay-desktop.usersys.redhat.com"
+      ## openssl x509 -req -days 365 -in /tmp/quay/quay.csr -out /tmp/quay/quay.crt \
+      ##     -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key -CAcreateserial \
+      ##     -extensions v3_req -extfile /etc/pki/tls/openssl.cnf
+
+      ## # Clair server
+      ## openssl genrsa -out /tmp/quay/clair.key 4096
+      ## openssl req -new -key /tmp/quay/clair.key -out /tmp/quay/clair.csr \
+      ##     -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN=thomasmckay-desktop.usersys.redhat.com"
+      ## openssl x509 -req -days 365 -in /tmp/quay/clair.csr -out /tmp/quay/clair.crt \
+      ##     -CA /tmp/quay/rootCA.crt -CAkey /tmp/quay/rootCA.key -CAcreateserial \
+      ##     -extensions v3_req -extfile /etc/pki/tls/openssl.cnf
+
+      # openssl genrsa -out /tmp/quay/rootCA.key 2048
+      # openssl req -x509 -new -nodes -key /tmp/quay/rootCA.key -sha256 -days 1024 -out /tmp/quay/rootCA.pem -subj '/CN=192.168.1.2'
+
+      # cat <<EOF > /tmp/quay/openssl.conf
+      # [req]
+      # req_extensions = v3_req
+      # distinguished_name = req_distinguished_name
+      # [req_distinguished_name]
+      # [ v3_req ]
+      # basicConstraints = CA:FALSE
+      # keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+      # subjectAltName = @alt_names
+      # [alt_names]
+      # DNS.1 = 192.168.1.2
+      # IP.1 = 192.168.1.2
+      # EOF
+
+      # openssl genrsa -out /tmp/quay/quay.key 2048
+      # openssl req -new -key /tmp/quay/quay.key -out /tmp/quay/quay.csr -subj "/CN=192.168.1.2" -config /tmp/quay/openssl.conf
+      # openssl x509 -req -in /tmp/quay/quay.csr -CA /tmp/quay/rootCA.pem -CAkey /tmp/quay/rootCA.key -CAcreateserial -out /tmp/quay/quay.cert -days 356 -extensions v3_req -extfile /tmp/quay/openssl.conf
+
+      # openssl genrsa -out /tmp/quay/clair.key 2048
+      # openssl req -new -key /tmp/quay/clair.key -out /tmp/quay/clair.csr -subj "/CN=192.168.1.2" -config /tmp/quay/openssl.conf
+      # openssl x509 -req -in /tmp/quay/clair.csr -CA /tmp/quay/rootCA.pem -CAkey /tmp/quay/rootCA.key -CAcreateserial -out /tmp/quay/clair.cert -days 356 -extensions v3_req -extfile /tmp/quay/openssl.conf
+
+      # # Single shared cert
+      # cat >> /tmp/quay/single.conf <<EOF
+      # [ req ]
+      # prompt = no
+      # distinguished_name = req_distinguished_name
+      # [ req_distinguished_name ]
+      # C = US
+      # ST = NY
+      # L = Cazenovia
+      # O = Red Hat
+      # OU = Quay
+      # CN = 192.168.1.2
+      # emailAddress = thomasmckay@redhat.com
+      # [ v3_req ]
+      # basicConstraints = CA:FALSE
+      # keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+      # subjectAltName = @alt_names
+      # [alt_names]
+      # DNS.1 = IP:192.168.1.2
+      # IP.1 = IP:192.168.1.2
+      # EOF
+
+      # openssl req -new -newkey rsa:4096 -x509 -sha256 -days 365 -nodes -out /tmp/quay/single.cert -keyout /tmp/quay/single.key -config /tmp/quay/single.conf
+      # cp /tmp/quay/single.cert ~/quay-config/ssl.cert
+      # cp /tmp/quay/single.key ~/quay-config/ssl.key
+      # cp /tmp/quay/single.cert ~/quay-builder/ssl.cert
+
+
+- name: Install rootCA and restart docker.service
+  shell:
+    cmd: |
+      sudo cp /tmp/quay/rootCA.crt /etc/pki/ca-trust/source/anchors
+      sudo update-ca-trust extract
+      sudo systemctl restart docker.service

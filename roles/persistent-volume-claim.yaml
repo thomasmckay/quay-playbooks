@@ -1,0 +1,51 @@
+---
+- name: "Check for PVC '{{ name }}'"
+  shell:
+    cmd:
+      oc get pvc -n "{{ namespace }}" | grep "{{ name }}"
+  ignore_errors: yes
+  register: result
+# Manipulating an existing PVC is not allowed
+# - name: "Remove non-backed PVC '{{ name }}'"
+#   command: "oc delete pvc -n {{ namespace }} {{ name }}"
+#   when: result is succeeded
+- name: "PersistentVolumeClaim '{{ name }}'"
+  when: result is failed
+  k8s:
+    state: present
+    definition:
+      kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata:
+        name: "{{ name }}"
+        namespace: "{{ namespace }}"
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+        storageClassName: slow
+        selector:
+          name: "{{ name }}"
+
+
+- name: "Create PVC '{{ name }}'"
+  when: result is failed
+  shell:
+    cmd: |
+      cat <<EOF | oc create -n "{{ namespace }}" -f -
+      kind: PersistentVolumeClaim
+      apiVersion: v1
+      metadata:
+        name: "{{ name }}"
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+        storageClassName: slow
+        selector:
+          name: "{{ name }}"
+      EOF

@@ -1,0 +1,859 @@
+########
+# Notes:
+# + to update a secret
+#   oc create secret generic privkey --from-file=/opt/privkey --dry-run -o yaml | oc replace -f -
+# + to redeploy
+#   oc set env deployment/quay-registry REDEPLOY="`date`"
+
+########
+# To restart minishift:
+#
+#    ansible-playbook minishift.yaml --tags=minishift
+#
+- hosts: localhost
+  tasks:
+  - name: minishift
+    tags: [minishift]
+    shell:
+      cmd: |
+        minishift delete --clear-cache --force && rm -rf ~/.minishift ~/.kube/* && \
+        minishift start --memory=12Gb && \
+        minishift addons apply admin-user && \
+        oc login -u system:admin && \
+        minishift console
+
+########
+# To setup quay
+#
+# ansible-playbook --skip-tags=minishift --private-key=~/.minishift/machines/minishift/id_rsa --u docker -i `minishift ip`, minishift.yaml
+#
+- hosts: all
+  become: true
+  tasks:
+  - name: Permissive selinux
+    command: setenforce 0
+  - name: Persistent Volume root
+    file:
+      path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv
+      state: directory
+  - name: Persistent Volume quay-postgres
+    file:
+      path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-postgres
+      state: directory
+      mode: 0777
+  - name: Persistent Volume quay-redis
+    file:
+      path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-redis
+      state: directory
+      mode: 0777
+  - name: Persistent Volume clair-postgres
+    tags: [clair]
+    file:
+      path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/clair-postgres
+      state: directory
+      mode: 0777
+  - name: Fetch minishift ca.crt
+    tags: [tls]
+    fetch:
+      src: /var/lib/minishift/base/openshift-apiserver/ca.crt
+      dest: tmp/minishift.crt
+      flat: yes
+  - name: Fetch minishift ca.key
+    tags: [tls]
+    fetch:
+      src: /var/lib/minishift/base/openshift-apiserver/ca.key
+      dest: tmp/minishift.key
+      flat: yes
+  - name: Fetch minishift ca.serial.txt
+    tags: [tls]
+    fetch:
+      src: /var/lib/minishift/base/openshift-apiserver/ca.serial.txt
+      dest: tmp/minishift.serial.txt
+      flat: yes
+
+- hosts: localhost
+  tasks:
+  - name: Check for Project 'quay-enterprise'
+    command: oc get projects -o jsonpath='{.items[?(.metadata.name=="quay-enterprise")].metadata.name}'
+    register: result
+  - name: Create project 'quay-enterprise' if doesn't exist
+    command: oc new-project quay-enterprise
+    when: result.stdout != "quay-enterprise"
+
+  - name: Check for PV 'quay-postgres'
+    command: oc get pv -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
+    register: result
+  - name: Create PV 'quay-postgres'
+    when: result.stdout != "quay-postgres"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolume
+        apiVersion: v1
+        metadata:
+          name: quay-postgres
+        spec:
+          capacity:
+            storage: 1Gi
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: slow
+          hostPath:
+            path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-postgres
+        EOF
+
+  - name: Check for PV 'quay-redis'
+    command: oc get pv -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-redis")].metadata.name}'
+    register: result
+  - name: Create PV 'quay-redis'
+    when: result.stdout != "quay-redis"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolume
+        apiVersion: v1
+        metadata:
+          name: quay-redis
+        spec:
+          capacity:
+            storage: 1Gi
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: slow
+          hostPath:
+            path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/quay-redis
+        EOF
+
+  - name: Import redis image
+    command: oc import-image openshift/redis:32 --from=registry.access.redhat.com/rhscl/redis-32-rhel7 -n quay-enterprise --confirm -n quay-enterprise
+
+  - name: Check for Template 'postgresql-persistent'
+    command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="postgresql-persistent")].metadata.name}'
+    register: result
+  - name: Create Template 'postgresql-persistent'
+    when: result.stdout != "postgresql-persistent"
+    command: oc create -n quay-enterprise -f https://raw.githubusercontent.com/openshift/origin/master/examples/db-templates/postgresql-persistent-template.json
+
+  - name: Check for DeploymentConfig 'quay-postgres'
+    command: oc get dc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-postgres")].metadata.name}'
+    register: result
+  - name: Process Template 'postgresql-persistent'
+    when: result.stdout != "quay-postgres"
+    shell:
+      cmd: |
+        oc process postgresql-persistent \
+               -p POSTGRESQL_USER=quay \
+               -p POSTGRESQL_PASSWORD=quay \
+               -p POSTGRESQL_DATABASE=quay \
+               -p VOLUME_CAPACITY=1Gi \
+               -p DATABASE_SERVICE_NAME=quay-postgres \
+               -p MEMORY_LIMIT=512Mi \
+           | oc create -n quay-enterprise -f -
+  - name: Remove non-backed PVC 'quay-postgres'
+    when: result.stdout != "quay-postgres"
+    command: oc delete pvc -n quay-enterprise quay-postgres
+  - name: Create PVC 'quay-postgres'
+    when: result.stdout != "quay-postgres"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolumeClaim
+        apiVersion: v1
+        metadata:
+          name: quay-postgres
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+          storageClassName: slow
+          selector:
+            name: quay-postgres
+        EOF
+
+  - name: Wait for Pod 'quay-postgres'
+    tags: [postgres]
+    shell:
+      cmd: oc get pods -n quay-enterprise | grep quay-postgres | grep -v deploy
+    register: result
+    until: "'Running' in (result.stdout)"
+    retries: 5
+    delay: 10
+  - name: Get name of Pod 'quay-postgres'
+    tags: [postgres]
+    when: result is succeeded
+    shell:
+      cmd: |
+        oc get pods | grep quay-postgres | grep -v deploy | awk '{print $1}'
+    register: pod
+  - name: Add postgres extensions to Pod 'quay-postgres'
+    tags: [postgres]
+    when: result is succeeded
+    shell:
+      cmd: |
+        oc rsh {{ pod.stdout }} /bin/bash -c 'echo "CREATE EXTENSION pg_trgm" | /opt/rh/rh-postgresql10/root/usr/bin/psql'
+  - name: Add postgres SUPERUSER permission to Pod 'quay-postgres'
+    tags: [postgres]
+    when: result is succeeded
+    shell:
+      cmd: |
+        oc rsh {{ pod.stdout }} /bin/bash -c 'echo "ALTER USER quay WITH SUPERUSER;" | /opt/rh/rh-postgresql10/root/usr/bin/psql'
+
+  - name: Check for Template 'redis-persistent'
+    command: oc get template -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="redis-persistent")].metadata.name}'
+    register: result
+  - name: Create Template 'redis-persistent'
+    when: result.stdout != "redis-persistent"
+    command: oc create -n quay-enterprise -f https://raw.githubusercontent.com/openshift/origin/master/examples/db-templates/redis-persistent-template.json
+
+  - name: Check for DeploymentConfig 'quay-redis'
+    command: oc get dc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-redis")].metadata.name}'
+    register: result
+  - name: Process Template 'redis-persistent'
+    when: result.stdout != "quay-redis"
+    shell:
+      cmd: |
+        oc process redis-persistent \
+               -p REDIS_PASSWORD=quay \
+               -p VOLUME_CAPACITY=1Gi \
+               -p DATABASE_SERVICE_NAME=quay-redis \
+               -p MEMORY_LIMIT=512Mi \
+           | oc create -n quay-enterprise -f -
+  - name: Remove non-backed PVC 'quay-redis'
+    when: result.stdout != "quay-redis"
+    command: oc delete pvc -n quay-enterprise quay-redis
+  - name: Create PVC 'quay-redis'
+    when: result.stdout != "quay-redis"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolumeClaim
+        apiVersion: v1
+        metadata:
+          name: quay-redis
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+          storageClassName: slow
+          selector:
+            name: quay-redis
+        EOF
+
+  - name: Check for Secret 'quay-enterprise-config-secret'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-config-secret")].metadata.name}'
+    register: result
+  - name: Create Secret 'quay-enterprise-config-secret'
+    when: result.stdout != "quay-enterprise-config-secret"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: quay-enterprise-config-secret
+        EOF
+
+  - name: Check for Secret 'quay-enterprise-cert-secret'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-cert-secret")].metadata.name}'
+    register: result
+  - name: Create TLS cert and key
+    when: result.stdout != "quay-enterprise-cert-secret"
+    shell:
+      cmd: |
+        openssl genrsa -out tmp/rootCA.key 2048
+        openssl req -x509 -new -nodes -key tmp/rootCA.key -sha256 -days 1024 -out tmp/rootCA.pem -subj '/CN=*.`minishift ip`.nip.io'
+        cat <<EOF > tmp/quay.conf
+        [req]
+        req_extensions = v3_req
+        distinguished_name = req_distinguished_name
+        [req_distinguished_name]
+        [ v3_req ]
+        basicConstraints = CA:FALSE
+        keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+        subjectAltName = @alt_names
+        [alt_names]
+        DNS.1 = *.`minishift ip`.nip.io
+        IP.1 = `minishift ip`
+        EOF
+        openssl genrsa -out tmp/quay.key 2048
+        openssl req -new -key tmp/quay.key -out tmp/quay.csr -subj "/CN=*.`minishift ip`.nip.io" -config tmp/quay.conf
+        openssl x509 -req -in tmp/quay.csr -CA tmp/rootCA.pem -CAkey tmp/rootCA.key -CAcreateserial -out tmp/quay.cert -days 356 -extensions v3_req -extfile tmp/quay.conf
+  - name: Create server cert
+    when: result.stdout != "quay-enterprise-cert-secret"
+    shell:
+      cmd: |
+        oc adm ca create-server-cert \
+          --signer-cert=tmp/minishift.crt \
+          --signer-key=tmp/minishift.key \
+          --signer-serial=tmp/minishift.serial.txt \
+          --hostnames="`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-registry\")].spec.host}'`,`oc get services -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.clusterIP}'`,`oc get routes -n quay-enterprise -o jsonpath='{.items[?(@.metadata.name==\"quay-config\")].spec.host}'`" \
+          --cert=ssl.cert \
+          --key=ssl.key
+  - name: Create secret 'quay-enterprise-cert-secret'
+    when: result.stdout != "quay-enterprise-cert-secret"
+    shell:
+      cmd: |
+        oc create secret generic quay-enterprise-cert-secret \
+           --from-file=ssl.cert=tmp/quay.cert --from-file=ssl.key=tmp/quay.key -n quay-enterprise
+
+  - name: Check for Secret 'quay-pull-secret'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-pull-secret")].metadata.name}'
+    register: result
+  - name: Create Secret 'quay-pull-secret'
+    when: result.stdout != "quay-pull-secret"
+    shell:
+      cmd: |
+        oc create secret generic quay-pull-secret --from-file=.dockerconfigjson=/home/thomasmckay/.docker/config.json --type=kubernetes.io/dockerconfigjson -n quay-enterprise
+        oc secrets link default quay-pull-secret --for=pull -n quay-enterprise
+        oc secrets link deployer quay-pull-secret -n quay-enterprise
+
+  - name: Check for 'quay:rhel7' image
+    shell:
+      cmd: oc get images -n quay-enterprise -o jsonpath='{.items[*].dockerImageReference}' | grep quay.io/thomasmckay/quay
+    ignore_errors: yes
+    register: result
+  - name: Import image 'quay:rhel7'
+    when: result is failure
+    command: oc import-image quay:rhel7 --from=quay.io/thomasmckay/quay:rhel7 -n quay-enterprise --confirm
+
+  - name: Check for Role 'quay-enterprise-serviceaccount'
+    command: oc get roles -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-serviceaccount")].metadata.name}'
+    register: result
+  - name: Create Role 'quay-enterprise-serviceaccount'
+    when: result.stdout != "quay-enterprise-serviceaccount"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Role
+        metadata:
+          name: quay-enterprise-serviceaccount
+          namespace: quay-enterprise
+        rules:
+        - apiGroups:
+          - ""
+          resources:
+          - secrets
+          verbs:
+          - get
+          # TODO: below don't work openshift online
+          - put
+          - patch
+          - update
+        - apiGroups:
+          - ""
+          resources:
+          - namespaces
+          verbs:
+          - get
+        - apiGroups:
+          - extensions
+          - apps
+          resources:
+          - deployments
+          verbs:
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        EOF
+  - name: Check for RoleBinding 'quay-enterprise'
+    command: oc get roles -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-enterprise-serviceaccount")].metadata.name}'
+    register: result
+  - name: Create RoleBinding 'quay-enterprise'
+    when: result.stdout != "quay-enterprise"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: rbac.authorization.k8s.io/v1beta1
+        kind: RoleBinding
+        metadata:
+          name: quay-enterprise-secret-writer
+          namespace: quay-enterprise
+        roleRef:
+          #apiGroup: rbac.authorization.k8s.io
+          kind: Role
+          name: quay-enterprise-serviceaccount
+        subjects:
+        - kind: ServiceAccount
+          name: default
+        EOF
+
+  - name: Check for Deployment 'quay-registry'
+    command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
+    register: result
+  - name: Create Deployment 'quay-registry'
+    when: result.stdout != "quay-registry"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: extensions/v1beta1
+        kind: Deployment
+        metadata:
+          namespace: quay-enterprise
+          name: quay-registry
+          labels:
+            quay-enterprise-component: app
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              quay-enterprise-component: app
+          template:
+            metadata:
+              namespace: quay-enterprise
+              labels:
+                quay-enterprise-component: app
+            spec:
+              volumes:
+                - name: configvolume
+                  projected:
+                    defaultMode: 511
+                    sources:
+                    - secret:
+                        name: quay-enterprise-config-secret
+                        path: config.yaml
+                    - secret:
+                        name: quay-enterprise-cert-secret
+              containers:
+              - name: quay-enterprise
+                image: quay.io/thomasmckay/quay:rhel7
+                imagePullPolicy: Always
+                env:
+                  - name: QUAYENTRY
+                    value: registry
+                  - name: REDEPLOY
+                    value: 1
+                ports:
+                - containerPort: 80
+                  protocol: TCP
+                - containerPort: 443
+                  protocol: TCP
+                volumeMounts:
+                - name: configvolume
+                  readOnly: false
+                  mountPath: /conf/stack
+              imagePullSecrets:
+                - name: quay-pull-secret
+        EOF
+
+  - name: Check for Service 'quay-registry'
+    command: oc get services -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
+    register: result
+  - name: Create Service 'quay-registry'
+    when: result.stdout != "quay-registry"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          namespace: quay-enterprise
+          name: quay-registry
+        spec:
+          ports:
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: 8080
+            - name: https
+              protocol: TCP
+              port: 443
+              targetPort: 8443
+          selector:
+            quay-enterprise-component: app
+        EOF
+
+  - name: Check for Route 'quay-registry'
+    command: oc get routes -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-registry")].metadata.name}'
+    register: result
+  - name: Create Route 'quay-registry'
+    when: result.stdout != "quay-registry"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: route.openshift.io/v1
+        kind: Route
+        metadata:
+          labels:
+            quay-enterprise-component: app
+          name: quay-registry
+          namespace: quay-enterprise
+        spec:
+          port:
+            targetPort: https
+          tls:
+            insecureEdgeTerminationPolicy: Redirect
+            termination: passthrough
+          to:
+            kind: Service
+            name: quay-registry
+            weight: 100
+          wildcardPolicy: None
+        EOF
+
+  - name: Check for Deployment 'quay-config'
+    command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-config")].metadata.name}'
+    register: result
+  - name: Create Deployment 'quay-config'
+    when: result.stdout != "quay-config"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: extensions/v1beta1
+        kind: Deployment
+        metadata:
+          namespace: quay-enterprise
+          name: quay-config
+          labels:
+            quay-enterprise-component: config
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              quay-enterprise-component: config
+          template:
+            metadata:
+              namespace: quay-enterprise
+              labels:
+                quay-enterprise-component: config
+            spec:
+              volumes:
+                - name: configvolume
+                  projected:
+                    sources:
+                    - secret:
+                        name: quay-enterprise-config-secret
+                        path: config.yaml
+                    - secret:
+                        name: quay-enterprise-cert-secret
+              containers:
+              - name: quay-enterprise
+                image: quay.io/thomasmckay/quay:rhel7
+                imagePullPolicy: Always
+                env:
+                - name: QUAYENTRY
+                  value: config
+                - name: REDEPLOY
+                  value: 1
+                ports:
+                - containerPort: 80
+                  protocol: TCP
+                - containerPort: 443
+                  protocol: TCP
+                volumeMounts:
+                - name: configvolume
+                  readOnly: false
+                  mountPath: /conf/stack
+              imagePullSecrets:
+                - name: quay-pull-secret
+        EOF
+
+  - name: Check for Service 'quay-config'
+    command: oc get services -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-config")].metadata.name}'
+    register: result
+  - name: Create Service 'quay-config'
+    when: result.stdout != "quay-config"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          namespace: quay-enterprise
+          name: quay-config
+        spec:
+          ports:
+            - name: http
+              protocol: TCP
+              port: 80
+              targetPort: 8080
+            - name: https
+              protocol: TCP
+              port: 443
+              targetPort: 8443
+          selector:
+            quay-enterprise-component: config
+        EOF
+
+  - name: Check for Route 'quay-config'
+    command: oc get routes -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="quay-config")].metadata.name}'
+    register: result
+  - name: Create Route 'quay-config'
+    when: result.stdout != "quay-config"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: route.openshift.io/v1
+        kind: Route
+        metadata:
+          labels:
+            quay-enterprise-component: config
+          name: quay-config
+          namespace: quay-enterprise
+        spec:
+          port:
+            targetPort: https
+          tls:
+            insecureEdgeTerminationPolicy: Redirect
+            termination: passthrough
+          to:
+            kind: Service
+            name: quay-config
+            weight: 100
+          wildcardPolicy: None
+        EOF
+
+  - name: Check for PV 'clair-postgres'
+    tags: [clair]
+    command: oc get pv -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-postgres")].metadata.name}'
+    register: result
+  - name: Create PV 'clair-postgres'
+    tags: [clair]
+    when: result.stdout != "clair-postgres"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolume
+        apiVersion: v1
+        metadata:
+          name: clair-postgres
+        spec:
+          capacity:
+            storage: 1Gi
+          accessModes:
+            - ReadWriteOnce
+          storageClassName: slow
+          hostPath:
+            path: /mnt/sda1/var/lib/minishift/openshift.local.volumes/pv/clair-postgres
+        EOF
+
+  - name: Check for DeploymentConfig 'clair-postgres'
+    tags: [clair]
+    command: oc get dc -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-postgres")].metadata.name}'
+    register: result
+  - name: Process Template 'clair-postgres'
+    tags: [clairx]
+    when: result.stdout != "clair-postgres"
+    shell:
+      cmd: |
+        oc process postgresql-persistent \
+               -p POSTGRESQL_USER=clair \
+               -p POSTGRESQL_PASSWORD=clair \
+               -p POSTGRESQL_DATABASE=clair \
+               -p VOLUME_CAPACITY=1Gi \
+               -p DATABASE_SERVICE_NAME=clair-postgres \
+               -p MEMORY_LIMIT=512Mi \
+           | oc apply -n quay-enterprise -f -
+
+  - name: Remove non-backed PVC 'clair-postgres'
+    tags: [clair]
+    when: result.stdout != "clair-postgres"
+    command: oc delete pvc -n quay-enterprise clair-postgres
+  - name: Create PVC 'clair-postgres'
+    tags: [clair]
+    when: result.stdout != "clair-postgres"
+    shell:
+      cmd: |
+        cat <<EOF | oc create -n quay-enterprise -f -
+        kind: PersistentVolumeClaim
+        apiVersion: v1
+        metadata:
+          name: clair-postgres
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+          storageClassName: slow
+          selector:
+            name: clair-postgres
+        EOF
+
+  - name: Check for Secret 'clair-config-secret'
+    tags: [clair, testing]
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-security-scanner-secret")].metadata.name}'
+    register: result
+  - name: Create secret 'clair-config-secret'
+    tags: [clair]
+    when: result.stdout != "clair-security-scanner-secret"
+    shell:
+      cmd: |
+        oc create secret generic clair-security-scanner-secret \
+           --from-file=security_scanner.pem=tmp/security_scanner.pem -n quay-enterprise
+  - name: Update secret 'clair-security-scanner-secret'
+    tags: [clair, testing]
+    when: result.stdout == "clair-config-secret"
+    shell:
+      cmd: |
+        oc create secret generic clair-security-scanner-secret \
+           --from-file=security_scanner.pem=tmp/security_scanner.pem -n quay-enterprise \
+           --dry-run -o yaml | oc replace -f -
+
+  - name: Check for Secret 'clair-config-secret'
+    command: oc get secrets -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair-config-secret")].metadata.name}'
+    register: result
+  - name: Create clair.yaml for Secret 'clair-config-secret'
+    tags: [clair]
+    shell:
+      cmd: |
+        cat <<EOF > tmp/clair.yaml
+        clair:
+          database:
+            type: pgsql
+            options:
+              source: postgresql://clair:clair@clair-postgres.quay-enterprise.svc/clair?sslmode=disable
+              cachesize: 16384
+          api:
+            healthport: 6061
+            port: 6062
+            timeout: 900s
+            paginationkey: "XxoPtCUzrUv4JV5dS+yQ+MdW7yLEJnRMwigVY/bpgtQ="
+          updater:
+            interval: 6h
+            enabledupdaters:
+            - rhel
+            - alpine
+            notifier:
+              attempts: 3
+              renotifyinterval: 1h
+              http:
+                endpoint: http://quay-registry.quay-enterprise.svc/secscan/notify
+                proxy: http://localhost:6063
+        jwtproxy:
+          signer_proxy:
+            enabled: true
+            listen_addr: :6063
+            ca_key_file: /certificates/mitm.key
+            ca_crt_file: /certificates/mitm.crt
+            signer:
+              issuer: security_scanner
+              expiration_time: 5m
+              max_skew: 1m
+              nonce_length: 32
+              private_key:
+                type: preshared
+                options:
+                  key_id: e93e8d55fcf0efb22368c09e710d751eb66d7d52395e798fef83978acc52f0c2
+                  #private_key_path: /config/security_scanner.pem
+                  private_key_path: /etc/clair/security_scanner.pem
+          verifier_proxies:
+          - enabled: true
+            listen_addr: :6060
+            # section below for more information.
+            # key_file: /config/clair.key
+            # crt_file: /config/clair.crt
+            verifier:
+              audience: http://clair.quay-enterprise.svc:6060
+              upstream: http://localhost:6062
+              key_server:
+                type: keyregistry
+                options:
+                  registry: http://quay-registry.quay-enterprise.svc/keys/
+        EOF
+  # - name: Create secret 'clair-config-secret'
+  #   tags: [clair]
+  #   when: result.stdout != "clair-config-secret"
+  #   shell:
+  #     cmd: |
+  #       oc create secret generic clair-config-secret \
+  #          --from-file=config.yaml=tmp/clair.yaml -n quay-enterprise
+  - name: Update secret 'clair-config-secret'
+    tags: [clair]
+    when: result.stdout == "clair-config-secret"
+    shell:
+      cmd: |
+        oc create secret generic clair-config-secret \
+           --from-file=config.yaml=tmp/clair.yaml -n quay-enterprise \
+           --dry-run -o yaml | oc replace -f -
+
+  - name: Check for Deployment 'clair'
+    tags: [clair]
+    command: oc get deployments -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair")].metadata.name}'
+    register: result
+  - name: Create or update Deployment 'clair'
+    tags: [clair]
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: extensions/v1beta1
+        kind: Deployment
+        metadata:
+          namespace: quay-enterprise
+          name: clair
+          labels:
+            quay-enterprise-component: clair
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              quay-enterprise-component: clair
+          template:
+            metadata:
+              namespace: quay-enterprise
+              labels:
+                quay-enterprise-component: clair
+            spec:
+              volumes:
+                - name: configvolume
+                  projected:
+                    defaultMode: 511
+                    sources:
+                    - secret:
+                        name: clair-config-secret
+                        path: config.yaml
+                    - secret:
+                        name: clair-security-scanner-secret
+                        path: security_scanner.pem
+              containers:
+              - name: quay-enterprise
+                #image: quay.io/thomasmckay/clair:rhel7
+                image: quay.io/coreos/clair:v2.0.7
+                imagePullPolicy: Always
+                ports:
+                - containerPort: 6060
+                  protocol: TCP
+                - containerPort: 6061
+                  protocol: TCP
+                volumeMounts:
+                - name: configvolume
+                  readOnly: false
+                  # mountPath: /config
+                  mountPath: /etc/clair
+              imagePullSecrets:
+                - name: quay-pull-secret
+        EOF
+
+  - name: Check for Service 'clair'
+    tags: [clair]
+    command: oc get services -n quay-enterprise -o jsonpath='{.items[?(.metadata.name=="clair")].metadata.name}'
+    register: result
+  - name: Create Service 'clair'
+    when: result.stdout != "clair"
+    shell:
+      cmd: |
+        cat <<EOF | oc apply -n quay-enterprise -f -
+        apiVersion: v1
+        kind: Service
+        metadata:
+          namespace: quay-enterprise
+          name: clair
+        spec:
+          ports:
+            - name: http
+              protocol: TCP
+              port: 6060
+              targetPort: 6060
+            - name: https
+              protocol: TCP
+              port: 6061
+              targetPort: 6061
+          selector:
+            quay-enterprise-component: clair
+        EOF
