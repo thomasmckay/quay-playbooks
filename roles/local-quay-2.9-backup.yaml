@@ -12,9 +12,11 @@
   shell:
     cmd: |
       cp ~/quay-config/config.yaml ~/quay-backup/config.yaml
+      cp -R ~/quay-storage ~/quay-backup/storage
       docker exec quay-postgresql bash -l -c 'pg_dump quay' > ~/quay-backup/backup.psql
 
 
 # restore
 # cp ~/quay-backup/config.yaml ~/quay-config/config.yaml
+# cp -R ~/quay-backup/storage ~/quay-storage
 # cat ~/quay-backup/backup.psql | docker exec -i quay-postgresql bash -l -c 'psql -d quay'

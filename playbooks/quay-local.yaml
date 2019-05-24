@@ -3,114 +3,120 @@
 # ansible-playbook --private-key=~/.minishift/machines/minishift/id_rsa --u docker -i `minishift ip`, playbooks/quay-local.yaml
 #
 - hosts: localhost
-  #become: true
+  vars:
+    quay_host: thomasmckay-desktop.usersys.redhat.com
+    quay_ip: 192.168.1.2
+    quay_image: quay.io/redhat/quay:v3.0.2
+    clair_image: quay.io/redhat/clair-jwt:v3.0.2
+    builder_image: quay.io/redhat/quay-builder:v3.0.2
+    roles_dir: ../roles
+    volumes_dir: /home/thomasmckay/quay-volumes
+    downloads_dir: /home/thomasmckay/Downloads
+
   tasks:
-    # Tear down
-    # - name: Tear down setup
-    #   tags: [teardown]
-    #   ignore_errors: yes
-    #   shell:
-    #     cmd: |
-    #       docker kill quay-postgresql quay-redis quay-config quay-registry clair-postgresql clair
-    #       rm -Rf ~/quay-postgresql ~/quay-config ~/quay-redis ~/quay-storage ~/clair-config ~/clair-postgresql
+    - name: Stop docker processes
+      tags: [teardown, start-setup]
+      ignore_errors: true
+      shell:
+        cmd: |
+          docker kill quay-postgresql quay-redis quay-config quay clair-postgresql clair
 
-    # Directories
-    - name: Quay Redis storage folder
-      tags: [quay, quay-config, quay-registry, clair, certs]
+    - name: Remove prior data and volume folders
+      tags: [teardown, start-setup]
+      command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
+      args:
+        removes: "{{ volumes_dir }}/{{ item }}"
+      with_items:
+        - quay-redis
+        - quay-postgresql
+        - quay-storage
+        - quay-config
+        - clair-postgresql
+        - clair-config
+        - quay-builder
+        - certs
+
+    - name: Create volume folders
+      tags: [start-setup]
       file:
-        path: ~/quay-redis
+        path: "{{ volumes_dir }}/{{ item }}"
         state: directory
-    - name: Quay Postgresql storage folder
-      tags: [quay, quay-config, quay-registry, clair, certs]
+      with_items:
+        - quay-redis
+        - quay-postgresql
+        - quay-storage
+        - quay-config
+        - clair-postgresql
+        - clair-config
+        - quay-builder
+        - certs
+
+    - name: Remove old Downloads
+      tags: [start-setup]
       file:
-        path: ~/quay-postgresql
-        state: directory
-    - name: Quay storage folder
-      tags: [quay, quay-config, quay-registry, clair, certs]
-      file:
-        path: ~/quay-storage
-        state: directory
-    - name: Quay registry folder
-      tags: [quay, quay-config, quay-registry, clair, certs]
-      file:
-        path: ~/quay-config
-        state: directory
-    - name: Clair Postgresql storage folder
-      tags: [quay, quay-config, quay-registry, clair, certs]
-      file:
-        path: ~/clair-postgresql
-        state: directory
-    - name: Clair Postgresql storage folder
-      tags: [quay, quay-config, quay-registry, clair, certs]
-      file:
-        path: ~/clair-config
-        state: directory
+        path: "{{ downloads_dir }}/{{ item }}"
+        state: absent
+      with_items:
+        - quay-config.tar.gz
+        - security_scanner.pem
 
-    # Certs
-    # - name: Create TLS cert and key
-    #   tags: [quay, certs]
-    #   shell:
-    #     cmd: |
-    #       openssl genrsa -out tmp/rootCA.key 2048
-    #       openssl req -x509 -new -nodes -key tmp/rootCA.key -sha256 -days 1024 -out tmp/rootCA.pem -subj '/CN=192.168.1.2'
+    - name: Create TLS cert and key
+      tags: [start-setup]
+      shell:
+        cmd: |
+          # Root CA
+          openssl genrsa -out {{ volumes_dir }}/certs/rootCA.key 4096
+          openssl req -new -x509 -key {{ volumes_dir }}/certs/rootCA.key -out {{ volumes_dir }}/certs/rootCA.crt \
+              -days 365 -extensions v3_ca -subj "/C=US/L=Syracuse/CN=Quay"
 
-    #       cat <<EOF > tmp/openssl.conf
-    #       [req]
-    #       req_extensions = v3_req
-    #       distinguished_name = req_distinguished_name
-    #       [req_distinguished_name]
-    #       [ v3_req ]
-    #       basicConstraints = CA:FALSE
-    #       keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-    #       subjectAltName = @alt_names
-    #       [alt_names]
-    #       DNS.1 = 192.168.1.2
-    #       IP.1 = 192.168.1.2
-    #       EOF
+          # Quay server
+          openssl genrsa -out {{ volumes_dir }}/certs/quay.key 4096
+          openssl req -new -key {{ volumes_dir }}/certs/quay.key -out {{ volumes_dir }}/certs/quay.csr \
+              -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN={{ quay_host }}"
+          openssl x509 -req -days 365 -in {{ volumes_dir }}/certs/quay.csr -out {{ volumes_dir }}/certs/quay.crt \
+              -CA {{ volumes_dir }}/certs/rootCA.crt -CAkey {{ volumes_dir }}/certs/rootCA.key \
+              -CAcreateserial -extensions v3_req -extfile /etc/pki/tls/openssl.cnf
 
-    #       openssl genrsa -out tmp/quay.key 2048
-    #       openssl req -new -key tmp/quay.key -out tmp/quay.csr -subj "/CN=192.168.1.2" -config tmp/openssl.conf
-    #       openssl x509 -req -in tmp/quay.csr -CA tmp/rootCA.pem -CAkey tmp/rootCA.key -CAcreateserial -out tmp/quay.cert -days 356 -extensions v3_req -extfile tmp/openssl.conf
+          # Clair server
+          openssl genrsa -out {{ volumes_dir }}/certs/clair.key 4096
+          openssl req -new -key {{ volumes_dir }}/certs/clair.key -out {{ volumes_dir }}/certs/clair.csr \
+              -subj "/C=US/ST=New York/L=Cazenovia/O=Red Hat/OU=Quay/emailAddress=thomasmckay@redhat.com/CN={{ quay_host }}"
+          openssl x509 -req -days 365 -in {{ volumes_dir }}/certs/clair.csr -out {{ volumes_dir }}/certs/clair.crt \
+              -CA {{ volumes_dir }}/certs/rootCA.crt -CAkey {{ volumes_dir }}/certs/rootCA.key \
+              -CAcreateserial -extensions v3_req -extfile /etc/pki/tls/openssl.cnf
 
-    #       openssl genrsa -out tmp/clair.key 2048
-    #       openssl req -new -key tmp/clair.key -out tmp/clair.csr -subj "/CN=192.168.1.2" -config tmp/openssl.conf
-    #       openssl x509 -req -in tmp/clair.csr -CA tmp/rootCA.pem -CAkey tmp/rootCA.key -CAcreateserial -out tmp/clair.cert -days 356 -extensions v3_req -extfile tmp/openssl.conf
+    - name: Install rootCA and restart docker.service
+      tags: [start-setup]
+      shell:
+        cmd: |
+          sudo cp {{ volumes_dir }}/certs/rootCA.crt /etc/pki/ca-trust/source/anchors
+          sudo update-ca-trust extract
+          sudo systemctl restart docker.service
 
-    # Quay Redis
-    #
-    - name: Quay Redis container
-      tags: [quay, quay-config, quay-registry]
-      docker_container:
-        name: quay-redis
-        image: registry.redhat.io/rhscl/redis-32-rhel7:latest
-        volumes:
-          - ~/quay-redis:/var/lib/redis:Z
-        ports:
-          - "6379:6379"
-        keep_volumes: false
-        auto_remove: true
-        state: started
-
-    # Quay Postgresql
-    #
     - name: Quay Postgresql container
-      tags: [quay, quay-config, quay-registry]
+      tags: [start-setup]
       docker_container:
         name: quay-postgresql
         image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
         volumes:
-          - ~/quay-postgresql:/var/lib/postgresql/data/pgdata:Z
+          - "{{ volumes_dir }}/quay-postgresql:/var/lib/postgresql/data/pgdata:Z"
         env:
           POSTGRESQL_USER: quay
           POSTGRESQL_PASSWORD: quay
           POSTGRESQL_DATABASE: quay
         ports:
           - "5432:5432"
-        keep_volumes: false
+        keep_volumes: true
         auto_remove: true
         state: started
+        restart: true
+        etc_hosts:
+          # This does not expand the hostname that lands in /etc/hosts
+          # "{{ quay_host }}": "{{ quay_ip }}"
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+
     - name: Postgresql add pg_trgm extension
-      tags: [quay, quay-config, quay-registry]
+      tags: [start-setup]
       shell:
         cmd: |
           docker exec quay-postgresql bash -l -c 'echo "CREATE EXTENSION pg_trgm" | psql quay'
@@ -119,48 +125,44 @@
       retries: 5
       delay: 10
 
-    # Quay
+    - name: Quay Redis container
+      tags: [start-setup]
+      docker_container:
+        name: quay-redis
+        image: registry.redhat.io/rhscl/redis-32-rhel7:latest
+        volumes:
+          - "{{ volumes_dir }}/quay-redis:/var/lib/redis:Z"
+        ports:
+          - "6379:6379"
+        etc_hosts:
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+        keep_volumes: true
+        auto_remove: true
+        state: started
+
     - name: Pull latest image
-      tags: [quay, quay-config, quay-registry]
+      tags: [start-setup]
       shell:
         cmd: |
-          docker pull quay.io/thomasmckay/quay:rhel7
+          docker pull {{ quay_image }}
 
-    # Quay Config
-    #
     - name: Quay Config container
-      tags: [quay, quay-config]
+      tags: [start-setup]
       docker_container:
         name: quay-config
-        image: quay.io/thomasmckay/quay:rhel7
+        image: "{{ quay_image }}"
         volumes:
-          - ~/quay-config:/conf/stack
-          - ~/quay-storage:/datastorage
+          - "{{ volumes_dir }}/quay-config:/conf/stack"
+          - "{{ volumes_dir }}/quay-storage:/datastorage"
         env:
           QUAYENTRY: config
           CONFIG_APP_PASSWORD: password
         ports:
-          - "8080:8080"
-          - "8443:8443"
-        keep_volumes: false
-        auto_remove: true
-        state: started
-
-    # Quay Registry
-    - name: Quay Registry container
-      tags: [quay, quay-registry]
-      docker_container:
-        name: quay-registry
-        image: quay.io/thomasmckay/quay:rhel7
-        volumes:
-          - ~/quay-config:/conf/stack
-          - ~/quay-storage:/datastorage
-        env:
-          QUAYENTRY: registry
-        ports:
-          - "80:8080"
-          - "443:8443"
-        keep_volumes: false
+          - "9080:8080"
+          - "9443:8443"
+        etc_hosts:
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+        keep_volumes: true
         auto_remove: true
         state: started
         restart: true
@@ -169,41 +171,79 @@
       retries: 5
       delay: 10
 
-    # Clair Postgresql
-    #
-    - name: Clair Postgresql container
-      tags: [clair]
-      docker_container:
-        name: clair-postgresql
-        image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
-        volumes:
-          - ~/clair-postgresql:/var/lib/postgresql/data/pgdata:Z
-        env:
-          POSTGRESQL_USER: clair
-          POSTGRESQL_PASSWORD: clair
-          POSTGRESQL_DATABASE: clair
-        ports:
-          - "5433:5432"
-        keep_volumes: false
-        auto_remove: true
-        state: started
+    - name: Open browser
+      tags: [start-setup]
+      command: "xdg-open https://{{ quay_host }}:9443"
 
-    # Clair
-    - name: Create clair.yaml
-      tags: [clair, clair-config]
-      vars:
-        quay_endpoint: 192.168.1.2
-        clair_endpoint: 192.168.1.2
+    - name: Install config
+      tags: [finish-setup]
       shell:
         cmd: |
-          cp tmp/clair.cert ~/clair-config/clair.cert
-          cp tmp/clair.key ~/clair-config/clair.key
-          cat <<EOF > ~/clair-config/config.yaml
+          mv {{ downloads_dir }}/quay-config.tar.gz {{ volumes_dir }}/quay-config/quay-config.tar.gz
+          tar xvf {{ volumes_dir }}/quay-config/quay-config.tar.gz -C {{ volumes_dir }}/quay-config
+          mv {{ downloads_dir }}/security_scanner.pem {{ volumes_dir }}/quay-config
+
+    - name: Pull latest image
+      tags: [finish-setup]
+      shell:
+        cmd: |
+          docker pull {{ quay_image }}
+
+    - name: Quay Registry container
+      tags: [finish-setup]
+      docker_container:
+        name: quay
+        image:  "{{ quay_image }}"
+        volumes:
+          - "{{ volumes_dir }}/quay-config:/conf/stack"
+          - "{{ volumes_dir }}/quay-storage:/datastorage"
+        env:
+          QUAYENTRY: registry
+          DEBUGLOG: "true"
+        ports:
+          - "80:8080"
+          - "443:8443"
+        etc_hosts:
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    - name: Determine security_scanner key ID
+      tags: [finish-setup]
+      shell:
+        cmd: |
+          docker exec quay-postgresql bash -l -c 'echo "select kid,service from servicekey;" | psql quay' | grep security_scanner | awk '{print $1}'
+      register: key_id
+
+    - name: Put security_scanner.pem in place
+      tags: [finish-setup]
+      shell:
+        cmd: |
+          cp {{ volumes_dir }}/quay-config/security_scanner.pem {{ volumes_dir }}/clair-config/
+
+    - name: Create clair.yaml
+      tags: [finish-setup]
+      vars:
+        quay_endpoint: "{{ quay_host }}"
+        clair_endpoint: "{{ quay_host }}"
+      shell:
+        cmd: |
+          cp {{ volumes_dir }}/certs/rootCA.crt {{ volumes_dir }}/clair-certs/rootCA.crt
+          cp {{ volumes_dir }}/quay-config/security_scanner.pem {{ volumes_dir }}/clair-config/security_scanner.pem
+          cp {{ volumes_dir }}/certs/clair.crt {{ volumes_dir }}/clair-config
+          cp {{ volumes_dir }}/certs/clair.key {{ volumes_dir }}/clair-config
+          cat <<EOF > {{ volumes_dir }}/clair-config/config.yaml
           clair:
             database:
               type: pgsql
               options:
-                source: postgresql://clair:clair@{{ clair_endpoint }}:5433/clair?sslmode=disable
+                source: postgresql://quay:quay@{{ clair_endpoint }}:5432/clair?sslmode=disable
                 cachesize: 16384
             api:
               healthport: 6061
@@ -225,8 +265,8 @@
             signer_proxy:
               enabled: true
               listen_addr: :6063
-              ca_key_file: /clair/config/mitm.key
-              ca_crt_file: /clair/config/mitm.cert
+              ca_key_file: /certificates/mitm.key
+              ca_crt_file: /certificates/mitm.crt
               signer:
                 issuer: security_scanner
                 expiration_time: 5m
@@ -235,13 +275,13 @@
                 private_key:
                   type: preshared
                   options:
-                    key_id: d00d5f27d51ec05048edb5d3a720b6743757e56a6f6296944977c20883e34bae
+                    key_id: {{ key_id.stdout }}
                     private_key_path: /clair/config/security_scanner.pem
             verifier_proxies:
             - enabled: true
               listen_addr: :6060
               key_file: /clair/config/clair.key
-              crt_file: /clair/config/clair.cert
+              crt_file: /clair/config/clair.crt
               verifier:
                 audience: https://{{ clair_endpoint }}:6060
                 upstream: http://localhost:6062
@@ -250,8 +290,50 @@
                   options:
                     registry: https://{{ quay_endpoint }}/keys/
           EOF
+
     - name: Pull latest image
-      tags: [clair]
+      tags: [finish-setup]
       shell:
         cmd: |
-          docker pull quay.io/thomasmckay/clair-jwt:rhel7
+          docker pull {{ clair_image }}
+
+    - name: Postgresql 'clair' database
+      tags: [finish-setup]
+      shell:
+        cmd: |
+          docker exec quay-postgresql bash -l -c 'createdb clair'
+      register: result
+      ignore_errors: yes
+
+
+    - name: Clair container
+      tags: [finish-setup]
+      docker_container:
+        name: clair
+        image: "{{ clair_image }}"
+        volumes:
+          - "{{ volumes_dir }}/clair-config:/clair/config:Z"
+          - "{{ volumes_dir }}/certs/rootCA.crt:/etc/pki/ca-trust/source/anchors/rootCA.crt"
+          # - {{ volumes_dir }}/certs/clair.cert:/etc/pki/ca-trust/source/anchors/clair.crt
+          # - {{ volumes_dir }}/certs/rootCA.pem:/etc/pki/ca-trust/source/anchors/ca.crt
+          #- {{ volumes_dir }}/clair-config/config.yaml:/config/config.yaml
+          #- {{ volumes_dir }}/clair-config:/clair/config:Z
+          # - {{ volumes_dir }}/certs/clair.cert:/usr/local/share/ca-certificates/ca.crt
+        ports:
+          - "6060:6060"
+          - "6061:6061"
+        etc_hosts:
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+        network_mode: host
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    - name: Open browser
+      tags: [finish-setup]
+      command: "xdg-open https://{{ quay_host }}"

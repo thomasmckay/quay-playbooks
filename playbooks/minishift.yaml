@@ -5,10 +5,14 @@
 #
 - hosts: localhost
   tasks:
-  - name: minishift
+  - name: Destroy minishift
     shell:
       cmd: |
-        minishift delete --clear-cache --force && rm -rf ~/.minishift ~/.kube/* && \
+        minishift delete --clear-cache --force && rm -rf ~/.minishift ~/.kube/*
+    ignore_errors: yes
+  - name: Start minishift
+    shell:
+      cmd: |
         minishift start --memory=12Gb && \
         minishift addons apply admin-user && \
         oc login -u system:admin && \

@@ -8,19 +8,19 @@
 - name: Put security_scanner.pem in place
   shell:
     cmd: |
-      cp ~/quay-config/security_scanner.pem ~/clair-config/
+      cp {{ volumes_dir }}/quay-config/security_scanner.pem {{ volumes_dir }}/clair-config/
 
 - name: Create clair.yaml
   vars:
-    quay_endpoint: thomasmckay-desktop.usersys.redhat.com
-    clair_endpoint: thomasmckay-desktop.usersys.redhat.com
+    quay_endpoint: "{{ quay_host }}"
+    clair_endpoint: "{{ quay_host }}"
   shell:
     cmd: |
-      cp /tmp/quay/rootCA.crt ~/clair-certs/rootCA.crt
-      cp ~/quay-config/security_scanner.pem ~/clair-config/security_scanner.pem
-      cp /tmp/quay/clair.crt ~/clair-config
-      cp /tmp/quay/clair.key ~/clair-config
-      cat <<EOF > ~/clair-config/config.yaml
+      cp {{ volumes_dir }}/certs/rootCA.crt {{ volumes_dir }}/clair-certs/rootCA.crt
+      cp {{ volumes_dir }}/quay-config/security_scanner.pem {{ volumes_dir }}/clair-config/security_scanner.pem
+      cp {{ volumes_dir }}/certs/clair.crt {{ volumes_dir }}/clair-config
+      cp {{ volumes_dir }}/certs/clair.key {{ volumes_dir }}/clair-config
+      cat <<EOF > {{ volumes_dir }}/clair-config/config.yaml
       clair:
         database:
           type: pgsql
@@ -74,7 +74,6 @@
       EOF
 
 - name: Pull latest image
-  tags: [all, restart]
   shell:
     cmd: |
       docker pull {{ clair_image }}
@@ -88,25 +87,24 @@
 
 
 - name: Clair container
-  tags: [all, restart]
   docker_container:
     name: clair
     image: "{{ clair_image }}"
     volumes:
-      - ~/clair-config:/clair/config:Z
-      - /tmp/quay/rootCA.crt:/etc/pki/ca-trust/source/anchors/rootCA.crt
-      # - /tmp/quay/clair.cert:/etc/pki/ca-trust/source/anchors/clair.crt
-      # - /tmp/quay/rootCA.pem:/etc/pki/ca-trust/source/anchors/ca.crt
-      #- ~/clair-config/config.yaml:/config/config.yaml
-      #- ~/clair-config:/clair/config:Z
-      # - /tmp/quay/clair.cert:/usr/local/share/ca-certificates/ca.crt
+      - "{{ volumes_dir }}/clair-config:/clair/config:Z"
+      - "{{ volumes_dir }}/certs/rootCA.crt:/etc/pki/ca-trust/source/anchors/rootCA.crt"
+      # - {{ volumes_dir }}/certs/clair.cert:/etc/pki/ca-trust/source/anchors/clair.crt
+      # - {{ volumes_dir }}/certs/rootCA.pem:/etc/pki/ca-trust/source/anchors/ca.crt
+      #- {{ volumes_dir }}/clair-config/config.yaml:/config/config.yaml
+      #- {{ volumes_dir }}/clair-config:/clair/config:Z
+      # - {{ volumes_dir }}/certs/clair.cert:/usr/local/share/ca-certificates/ca.crt
     ports:
       - "6060:6060"
       - "6061:6061"
     etc_hosts:
-      thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+      "{{ quay_host }}:{{ quay_ip }}"
     network_mode: host
-    keep_volumes: false
+    keep_volumes: true
     auto_remove: true
     state: started
     restart: true

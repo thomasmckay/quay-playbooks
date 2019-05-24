@@ -1,0 +1,50 @@
+- hosts: localhost
+  vars:
+    name: quay-postgresql
+    namespace: quay-enterprise
+    user: quay
+    database: quay
+  tasks:
+  - name: Apply quay-operator
+    shell:
+      cmd: |
+        oc new-project quay-enterprise
+        oc create -f /home/thomasmckay/code/operators/quay-operator/deploy/crds/cop_v1alpha1_quayecosystem_crd.yaml
+        oc create -f /home/thomasmckay/code/operators/quay-operator/deploy/service_account.yaml
+        oc create -f /home/thomasmckay/code/operators/quay-operator/deploy/cluster_role.yaml
+        oc create -f /home/thomasmckay/code/operators/quay-operator/deploy/cluster_role_binding.yaml
+        oc create -f /home/thomasmckay/code/operators/quay-operator/deploy/role.yaml
+        oc create -f /home/thomasmckay/code/operators/quay-operator/deploy/role_binding.yaml
+        oc create -f /home/thomasmckay/code/operators/quay-operator/deploy/operator.yaml
+        oc create secret generic redhat-pull-secret \
+            --from-file=".dockerconfigjson=/home/thomasmckay/.docker/config.json" \
+            --type='kubernetes.io/dockerconfigjson'
+        oc create -f /home/thomasmckay/code/operators/quay-operator/deploy/crds/minishift.yaml
+
+  - name: "Wait for Pod '{{ name }}'"
+    tags: [postgresql]
+    shell:
+      cmd:
+        "oc get pods -n {{ namespace }} | grep {{ name }} | grep -v deploy"
+    register: result
+    until: "'Running' in (result.stdout)"
+    retries: 5
+    delay: 30
+  - name: "Get name of Pod '{{ name }}'"
+    tags: [postgresql]
+    when: result is succeeded
+    shell:
+      cmd:
+        "oc get pods -n {{ namespace }} | grep {{ name }} | grep -v deploy | awk '{print $1}'"
+    register: pod
+  - name: "Add postgres SUPERUSER permission to Pod '{{ name }}'"
+    when: result is succeeded
+    shell:
+      cmd:
+        oc rsh -n "{{ namespace }}" {{ pod.stdout }} /bin/bash -c 'echo "ALTER USER {{ user }} WITH SUPERUSER;" | psql'
+  - name: "Add postgres extensions to Pod '{{ name }}'"
+    tags: [postgresql]
+    when: result is succeeded
+    shell:
+      cmd:
+        oc rsh -n "{{ namespace }}" {{ pod.stdout }} /bin/bash -c 'echo "CREATE EXTENSION pg_trgm" | psql -U {{ user }} {{ database }}'

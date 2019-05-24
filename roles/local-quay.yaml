@@ -1,18 +1,16 @@
 ---
 - name: Pull latest image
-  tags: [all, restart]
   shell:
     cmd: |
       docker pull {{ quay_image }}
 
 - name: Quay Registry container
-  tags: [all, restart]
   docker_container:
     name: quay
     image:  "{{ quay_image }}"
     volumes:
-      - ~/quay-config:/conf/stack
-      - ~/quay-storage:/datastorage
+      - "{{ volumes_dir }}/quay-config:/conf/stack"
+      - "{{ volumes_dir }}/quay-storage:/datastorage"
     env:
       QUAYENTRY: registry
       DEBUGLOG: "true"
@@ -20,8 +18,8 @@
       - "80:8080"
       - "443:8443"
     etc_hosts:
-      thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-    keep_volumes: false
+      "{{ quay_host }}:{{ quay_ip }}"
+    keep_volumes: true
     auto_remove: true
     state: started
     restart: true
