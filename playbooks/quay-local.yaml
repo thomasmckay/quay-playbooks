@@ -190,7 +190,7 @@
           docker pull {{ quay_image }}
 
     - name: Quay Registry container
-      tags: [finish-setup]
+      tags: [finish-setup, restart-quay]
       docker_container:
         name: quay
         image:  "{{ quay_image }}"
@@ -205,6 +205,7 @@
           - "443:8443"
         etc_hosts:
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+        #network_mode: host
         keep_volumes: true
         auto_remove: true
         state: started
@@ -255,12 +256,12 @@
               enabledupdaters:
               - rhel
               - alpine
-              notifier:
-                attempts: 3
-                renotifyinterval: 1h
-                http:
-                  endpoint: https://{{ quay_endpoint }}/secscan/notify
-                  proxy: http://localhost:6063
+            notifier:
+              attempts: 3
+              renotifyinterval: 1h
+              http:
+                endpoint: https://{{ quay_endpoint }}/secscan/notify
+                proxy: http://localhost:6063
           jwtproxy:
             signer_proxy:
               enabled: true
@@ -307,7 +308,7 @@
 
 
     - name: Clair container
-      tags: [finish-setup]
+      tags: [finish-setup, restart-clair]
       docker_container:
         name: clair
         image: "{{ clair_image }}"
