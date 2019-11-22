@@ -1,0 +1,128 @@
+- hosts: localhost
+  vars:
+    quay_host: thomasmckay.usersys.redhat.com
+    quay_ip: 192.168.1.2
+    quay_image: quay.io/redhat/quay:v3.0.4
+    clair_image: quay.io/redhat/clair-jwt:v3.0.4
+    builder_image: quay.io/redhat/quay-builder:v3.0.4
+    #quay_image: quay.io/quay/quay:v3.0.3-rc1-f2b5289
+    #clair_image: quay.io/quay/clair-jwt:v3.0.3-rc1-6545741
+    #builder_image: quay.io/quay/quay-builder:v3.0.3-rc1-1928a1b
+    roles_dir: ../roles
+    volumes_dir: /home/thomasmckay/quay-volumes
+    downloads_dir: /home/thomasmckay/Downloads
+    quay_http_port: 8080
+    quay_https_port: 8443
+
+  tasks:
+    - name: Remove prior data and volume folders
+      tags: [psql]
+      command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
+      args:
+        removes: "{{ volumes_dir }}/{{ item }}"
+      with_items:
+        - quay-test-psql
+
+    - name: Create volume folders
+      tags: [psql]
+      file:
+        path: "{{ volumes_dir }}/{{ item }}"
+        state: directory
+      with_items:
+        - quay-test-psql
+
+    - name: Quay Postgresql container
+      tags: [psql]
+      docker_container:
+        name: quay-test-psql
+        image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
+        volumes:
+          - "{{ volumes_dir }}/quay-test-psql:/var/lib/postgresql/data/pgdata:Z"
+        env:
+          POSTGRESQL_USER: quay
+          POSTGRESQL_PASSWORD: quay
+          POSTGRESQL_DATABASE: quay
+        ports:
+          - "5433:5432"
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+        etc_hosts:
+          # This does not expand the hostname that lands in /etc/hosts
+          # "{{ quay_host }}": "{{ quay_ip }}"
+          thomasmckay.usersys.redhat.com: 192.168.1.48
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
+
+    - name: Postgresql add pg_trgm extension
+      tags: [psql]
+      shell:
+        cmd: |
+          docker exec quay-test-psql bash -l -c 'echo "CREATE EXTENSION pg_trgm" | psql quay'
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    - name: Remove prior data and volume folders
+      tags: [mysql]
+      command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
+      args:
+        removes: "{{ volumes_dir }}/{{ item }}"
+      with_items:
+        - quay-test-mysql
+
+    - name: Create volume folders
+      tags: [mysql]
+      file:
+        path: "{{ volumes_dir }}/{{ item }}"
+        state: directory
+      with_items:
+        - quay-test-mysql
+
+    - name: Permissions on data and volume folders
+      tags: [mysql]
+      command: "sudo chmod a+rwx {{ volumes_dir }}/{{ item }}"
+      args:
+        removes: "{{ volumes_dir }}/{{ item }}"
+      with_items:
+        - quay-test-mysql
+
+    # docker run --rm -it --name quay-test-mysql -e MYSQL_ROOT_PASSWORD=redhat -e MYSQL_USER=quay -e MYSQL_PASSWORD=quay -e MYSQL_DATABASE=quay -v /home/thomasmckay/quay-volumes/quay-test-mysql:/var/lib/mysql/data:Z registry.redhat.io/rhscl/mysql-57-rhel7:latest
+    - name: Quay Mysql container
+      tags: [mysql]
+      docker_container:
+        name: quay-test-mysql
+        image: registry.redhat.io/rhscl/mysql-57-rhel7:latest
+        volumes:
+          - "{{ volumes_dir }}/quay-test-mysql:/var/lib/mysql/data:Z"
+        env:
+          MYSQL_ROOT_PASSWORD: redhat
+          MYSQL_USER: quay
+          MYSQL_PASSWORD: quay
+          MYSQL_DATABASE: quay
+        ports:
+          - "5434:3306"
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+        etc_hosts:
+          # This does not expand the hostname that lands in /etc/hosts
+          # "{{ quay_host }}": "{{ quay_ip }}"
+          thomasmckay.usersys.redhat.com: 192.168.1.48
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+
+# manually run
+#
+# ansible-playbook -i "localhost," playbooks/quay-unit-test.yaml --tags psql
+# ENCRYPTED_ROBOT_TOKEN_MIGRATION_PHASE=remove-old-fields TEST_DATABASE_URI="postgresql://quay:quay@thomasmckay.usersys.redhat.com:5433/quay" TEST=true PYTHONPATH=. alembic upgrade head
+#
+# TEST_DATABASE_URI="mysql+pymysql://quay:quay@thomasmckay.usersys.redhat.com:5434/quay" TEST=true PYTHONPATH=. alembic upgrade head
