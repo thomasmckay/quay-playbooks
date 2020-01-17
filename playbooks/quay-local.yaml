@@ -4,7 +4,7 @@
 #
 # ansible-playbook -i "localhost," -e quay_host=thomasmckay.usersys.redhat.com -e quay_ip=192.168.1.4 -e quay_image=quay.io/thomasmckay/quay:devel playbooks/quay-local.yaml --tags teardown
 #
-# docker run -it --rm --network=host -v /home/thomasmckay/quay-volumes/quay-config:/conf/stack -v /home/thomasmckay/quay-volumes/quay-storage:/datastorage -e ENCRYPTED_ROBOT_TOKEN_MIGRATION_PHASE=migration-complete quay.io/redhat/quay:v3.1.2 registry
+# docker run -it --rm --network=host -v /home/thomasmckay/quay-volumes/quay-config:/conf/stack -v /home/thomasmckay/quay-volumes/quay-storage/local:/datastorage quay.io/redhat/quay:v3.1.2 registry
 #
 - hosts: localhost
   vars:
@@ -25,7 +25,7 @@
       ignore_errors: true
       shell:
         cmd: |
-          docker kill quay-postgresql quay-redis quay-config quay clair grafana prometheus
+          docker kill quay-postgresql quay-redis quay-config quay clair grafana prometheus swagger quay-minio
     - name: Stop docker processes
       tags: [redeploy-clair]
       ignore_errors: true
@@ -43,7 +43,6 @@
         - quay-postgresql
         - quay-storage
         - quay-config
-        - clair-postgresql
         - clair-config
         - quay-builder
         - certs
@@ -57,9 +56,9 @@
       with_items:
         - quay-redis
         - quay-postgresql
-        - quay-storage
+        - quay-storage/local
+        - quay-storage/minio
         - quay-config
-        - clair-postgresql
         - clair-config
         - quay-builder
         - certs
@@ -116,6 +115,7 @@
         image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
         volumes:
           - "{{ volumes_dir }}/quay-postgresql:/var/lib/postgresql/data/pgdata:Z"
+          #- "{{ volumes_dir }}/quay-postgresql:/var/lib/pgsql/data/userdata:Z"
         env:
           POSTGRESQL_USER: quay
           POSTGRESQL_PASSWORD: quay
@@ -131,7 +131,6 @@
           # "{{ quay_host }}": "{{ quay_ip }}"
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
 
     - name: Postgresql add pg_trgm extension
       tags: [start-setup, restart-all, restart-postgresql]
@@ -155,7 +154,6 @@
         etc_hosts:
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
         keep_volumes: true
         auto_remove: true
         state: started
@@ -163,7 +161,7 @@
     - name: Create prometheus.yml
       tags: [start-setup, redeploy-prometheus]
       vars:
-        quay_endpoint: "{{ quay_host }}:9092"
+        quay_endpoint: "{{ quay_host }}:9091"
       shell:
         cmd: |
           cat <<EOF > {{ volumes_dir }}/prometheus/prometheus.yml
@@ -177,7 +175,7 @@
           EOF
 
     - name: Prometheus container
-      tags: [start-setup, restart-all, redeploy-prometheus]
+      tags: [finish-setup, restart-all, restart-prometheus, redeploy-prometheus]
       docker_container:
         name: prometheus
         image: registry.redhat.io/openshift3/prometheus:v3.11
@@ -194,7 +192,7 @@
         restart: true
 
     - name: Grafana container
-      tags: [start-setup, restart-all, redeploy-prometheus, redeploy-grafana]
+      tags: [finish-setup, restart-all, redeploy-prometheus, redeploy-grafana]
       docker_container:
         name: grafana
         image: registry.redhat.io/openshift3/grafana:v3.11
@@ -206,14 +204,49 @@
         etc_hosts:
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
         keep_volumes: true
         auto_remove: true
         state: started
         restart: true
 
+    # Pre-setup required
+    #     % aws configure
+    #     AWS Access Key ID [None]: minioadmin
+    #     AWS Secret Access Key [None]: minioadmin
+    #     Default region name [None]: us-east-1
+    #     Default output format [None]: ENTER
+    #
+    - name: "MinIO container"
+      tags: [start-setup, restart-minio, restart-all]
+      docker_container:
+        name: quay-minio
+        image: minio/minio
+        command:
+          - server
+          - /data
+        volumes:
+          - "{{ volumes_dir }}/quay-storage/minio:/data"
+        ports:
+          - "9000:9000"
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    - name: MinIO config
+      tags: [start-setup, restart-minio, restart-all]
+      shell:
+        cmd: |
+          aws --endpoint-url http://{{ quay_host }}:9000 --no-verify-ssl s3 mb s3://quay-bucket-1
+          aws --endpoint-url http://{{ quay_host }}:9000 --no-verify-ssl s3 mb s3://quay-bucket-2
+
+
     - name: Pull latest image
-      tags: [start-setup]
+      tags: [start-setup, repull-quay]
       ignore_errors: true
       shell:
         cmd: |
@@ -226,19 +259,17 @@
         image: "{{ quay_image }}"
         volumes:
           - "{{ volumes_dir }}/quay-config:/conf/stack"
-          - "{{ volumes_dir }}/quay-storage:/datastorage"
+          - "{{ volumes_dir }}/quay-storage/local:/datastorage"
           - "/home/thomasmckay/code/quay-devel:/home/thomasmckay/code/quay-devel"
         env:
           QUAYENTRY: config
           CONFIG_APP_PASSWORD: password
-          ENCRYPTED_ROBOT_TOKEN_MIGRATION_PHASE: new-installation
         ports:
           - "9080:8080"
           - "9443:8443"
         etc_hosts:
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
         keep_volumes: true
         auto_remove: true
         state: started
@@ -248,7 +279,7 @@
       retries: 5
       delay: 10
 
-    - name: Open browser
+    - name: "Open browser: Quay Config"
       tags: [start-setup]
       command: "xdg-open https://{{ quay_host }}:9443"
 
@@ -261,13 +292,14 @@
           mv {{ downloads_dir }}/security_scanner.pem {{ volumes_dir }}/quay-config
 
     - name: Allow Swagger to query API
+      tags: [finish-setup]
       lineinfile:
-        path: {{ volumes_dir }}/quay-config/config.yaml
-        regexp: '^BROWSER_API_CALLS_XHR_ONLY:'
-        line: BROWSER_API_CALLS_XHR_ONLY: false
+        path: "{{ volumes_dir }}/quay-config/config.yaml"
+        regexp: "^BROWSER_API_CALLS_XHR_ONLY:"
+        line: "BROWSER_API_CALLS_XHR_ONLY: false"
 
     - name: Pull latest image
-      tags: [pull-latest]
+      tags: [pull-latest, repull-quay]
       shell:
         cmd: |
           docker pull {{ quay_image }}
@@ -279,23 +311,23 @@
         image:  "{{ quay_image }}"
         volumes:
           - "{{ volumes_dir }}/quay-config:/conf/stack"
-          - "{{ volumes_dir }}/quay-storage:/datastorage"
+          - "{{ volumes_dir }}/quay-storage/local:/datastorage"
           - "/home/thomasmckay/code/quay-devel:/home/thomasmckay/code/quay-devel"
         env:
           QUAYENTRY: registry
           DEBUGLOG: "true"
           QUAY_OVERRIDE_SERVICES: "repomirrorworker=true"
-          ENCRYPTED_ROBOT_TOKEN_MIGRATION_PHASE: new-installation
         ports:
           - "{{ quay_http_port }}:8080"
           - "{{ quay_https_port }}:8443"
+          - "9091:9091"
           - "9092:9092"
           - "1234:1234"
           - "2345:2345"
+          - "2346:2346"
         etc_hosts:
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
         network_mode: host
         keep_volumes: true
         auto_remove: true
@@ -313,7 +345,7 @@
         image: "{{ quay_image }}"
         volumes:
           - "{{ volumes_dir }}/quay-config:/conf/stack"
-          - "{{ volumes_dir }}/quay-storage:/datastorage"
+          - "{{ volumes_dir }}/quay-storage/local:/datastorage"
           - "/home/thomasmckay/code/quay:/home/thomasmckay/code/quay"
         env:
           QUAYENTRY: repomirror
@@ -324,7 +356,6 @@
         etc_hosts:
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
         keep_volumes: true
         auto_remove: true
         state: started
@@ -412,7 +443,7 @@
           EOF
 
     - name: Pull latest image
-      tags: [finish-setup, redeploy-clair]
+      tags: [finish-setup, repull-clair]
       shell:
         cmd: |
           docker pull {{ clair_image }}
@@ -434,7 +465,7 @@
       ignore_errors: yes
 
     - name: Clair container
-      tags: [finish-setup, restart-clair, redeploy-clair, restart-all]
+      tags: [finish-setup, restart-clair, restart-clair, redeploy-clair, restart-all]
       docker_container:
         name: clair
         image: "{{ clair_image }}"
@@ -453,7 +484,6 @@
         etc_hosts:
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
         network_mode: host
         keep_volumes: true
         auto_remove: true
@@ -465,7 +495,7 @@
       delay: 10
 
     - name: Swagger container
-      tags: [finish-setup, restart-all]
+      tags: [finish-setup, restart-all, restart-swagger]
       docker_container:
         name: swagger
         image:  swaggerapi/swagger-ui
@@ -473,7 +503,7 @@
           API_URL: "https://{{ quay_host }}:{{ quay_https_port }}/api/v1/discovery"
         ports:
           - "8888:8080"
-        network_mode: host
+        #network_mode: host
         auto_remove: true
         state: started
         restart: true
@@ -482,15 +512,19 @@
       retries: 5
       delay: 10
 
-    - name: Open browser
+    - name: "Open browser: Quay"
       tags: [finish-setup]
       command: "xdg-open https://{{ quay_host }}:8443"
 
-    - name: Open browser
+    - name: "Open browser: Swagger"
       tags: [finish-setup]
-      command: "xdg-open https://{{ quay_host }}:8888"
+      command: "xdg-open http://{{ quay_host }}:8888/#/mirror/changeRepoMirrorConfig"
 
-    - name: Open browser
+    - name: "Open browser: Grafana"
       tags: [finish-setup]
-      command: "xdg-open https://{{ quay_host }}:8666"
+      command: "xdg-open http://{{ quay_host }}:8666"
+
+    - name: "Open browser: MinIO"
+      tags: [finish-setup]
+      command: "xdg-open http://{{ quay_host }}:9000"
 

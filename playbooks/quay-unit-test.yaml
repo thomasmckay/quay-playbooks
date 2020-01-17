@@ -123,6 +123,6 @@
 # manually run
 #
 # ansible-playbook -i "localhost," playbooks/quay-unit-test.yaml --tags psql
-# ENCRYPTED_ROBOT_TOKEN_MIGRATION_PHASE=remove-old-fields TEST_DATABASE_URI="postgresql://quay:quay@thomasmckay.usersys.redhat.com:5433/quay" TEST=true PYTHONPATH=. alembic upgrade head
+# ENCRYPTED_ROBOT_TOKEN_MIGRATION_PHASE=new-installation TEST_DATABASE_URI="postgresql://quay:quay@thomasmckay.usersys.redhat.com:5433/quay" TEST=true PYTHONPATH=. alembic upgrade head
 #
-# TEST_DATABASE_URI="mysql+pymysql://quay:quay@thomasmckay.usersys.redhat.com:5434/quay" TEST=true PYTHONPATH=. alembic upgrade head
+# ENCRYPTED_ROBOT_TOKEN_MIGRATION_PHASE=new-installation TEST_DATABASE_URI="mysql+pymysql://quay:quay@thomasmckay.usersys.redhat.com:5434/quay" TEST=true PYTHONPATH=. alembic upgrade head
