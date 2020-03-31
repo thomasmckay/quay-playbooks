@@ -47,6 +47,7 @@
         - quay-builder
         - certs
         - prometheus
+        - openldap
 
     - name: Create volume folders
       tags: [start-setup]
@@ -58,9 +59,11 @@
         - quay-postgresql
         - quay-storage/local
         - quay-storage/minio
+        - openldap/config
+        - openldap/database
         - quay-config
         - clair-config
-        - quay-builder
+        - quay-builder/certs
         - certs
         - prometheus
 
@@ -244,6 +247,155 @@
           aws --endpoint-url http://{{ quay_host }}:9000 --no-verify-ssl s3 mb s3://quay-bucket-1
           aws --endpoint-url http://{{ quay_host }}:9000 --no-verify-ssl s3 mb s3://quay-bucket-2
 
+    - name: Stop OpenLDAP containers
+      tags: [restart-openldap]
+      ignore_errors: true
+      shell:
+        cmd: |
+          docker kill quay-openldap
+
+    - name: Remove prior OpenLDAP data and volume folders
+      tags: [restart-openldap]
+      command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
+      args:
+        removes: "{{ volumes_dir }}/{{ item }}"
+      with_items:
+        - openldap
+
+    - name: Create OpenLDAP volume folders
+      tags: [restart-openldap]
+      file:
+        path: "{{ volumes_dir }}/{{ item }}"
+        state: directory
+      with_items:
+        - openldap/config
+        - openldap/database
+
+    - name: OpenLDAP container
+      # No start-setup tag until working
+      tags: [restart-openldap]
+      docker_container:
+        name: quay-openldap
+        image: osixia/openldap:1.3.0
+        env:
+          LDAP_ADMIN_PASSWORD: changeme
+          LDAP_ORGANISATION: acmecorp
+          LDAP_DOMAIN: acmecorp.com
+          LDAP_BASE_DN: "dc=acmecorp,dc=com"
+        volumes:
+          - "{{ volumes_dir }}/openldap/config:/etc/ldap/slapd.d"
+          - "{{ volumes_dir }}/openldap/database:/var/lib/ldap"
+        ports:
+          - "389:389"
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+        etc_hosts:
+          # This does not expand the hostname that lands in /etc/hosts
+          # "{{ quay_host }}": "{{ quay_ip }}"
+          thomasmckay.usersys.redhat.com: 192.168.1.119
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    - name: OpenLDAP Admin container
+      # Admin container cannot connect to ldap, unsure why
+      tags: [dont-start] #[restart-openldap]
+      docker_container:
+        name: quay-openldap-admin
+        image: osixia/phpldapadmin
+        env:
+          PHPLDAPADMIN_LDAP_HOSTS: "{{ quay_host }}"
+        ports:
+          - "6080:80"
+          - "6443:443"
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+        etc_hosts:
+          # This does not expand the hostname that lands in /etc/hosts
+          # "{{ quay_host }}": "{{ quay_ip }}"
+          thomasmckay.usersys.redhat.com: 192.168.1.119
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    # To generate password: docker exec -it quay-openldap slappasswd -h {SSHA}
+    # Searches:
+    #   -b dc=acmecorp,dc=com "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=acmecorp,dc=com))"
+    - name: Initialize OpenLDAP
+      tags: [setup-openldap]
+      shell:
+        cmd: |
+          sudo chmod -R a+rwx {{ volumes_dir }}/openldap
+
+          cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/base.ldif
+          dn: ou=users,dc=acmecorp,dc=com
+          objectClass: organizationalUnit
+          objectClass: top
+          ou: users
+
+          dn: ou=groups,dc=acmecorp,dc=com
+          objectClass: organizationalUnit
+          objectClass: top
+          ou: groups
+          EOF
+          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/base.ldif
+
+    - name: OpenLDAP Users
+      tags: [setup-openldap]
+      shell:
+        cmd: |
+          cat <<EOF > {{ volumes_dir }}/openldap/config/user{{ item }}.ldif
+          dn: uid=user{{ item }},ou=users,dc=acmecorp,dc=com
+          objectClass: top
+          objectClass: account
+          objectClass: posixAccount
+          objectClass: shadowAccount
+          cn: user{{ item }}
+          uid: user{{ item }}
+          uidNumber: 1111{{ item }}
+          gidNumber: 100
+          homeDirectory: /home/user{{ item }}
+          loginShell: /bin/bash
+          gecos: user{{ item }}
+          userPassword: {SSHA}Loo/AhflWy4tg4S/E7+MEXTCDH4yTtyB
+          shadowLastChange: 0
+          shadowMax: 0
+          shadowWarning: 0
+          EOF
+          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/user{{ item }}.ldif
+      with_sequence: count=4
+
+    - name: OpenLDAP Groups
+      tags: [setup-openldap]
+      shell:
+        cmd: |
+          cat <<EOF > {{ volumes_dir }}/openldap/config/group{{ item }}.ldif
+          dn: cn=group{{ item }},ou=groups,dc=acmecorp,dc=com
+          objectClass: top
+          objectClass: groupOfUniqueNames
+          gidNumber: {{ item }}{{ item }}{{ item }}
+          EOF
+          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/group{{ item }}.ldif
+      with_sequence: count=4
+
+    - name: OpenLDAP Users to Groups
+      tags: [setup-openldap]
+      shell:
+        cmd: |
+          cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/user{{ item }}_to_group{{ item }}.ldif
+          dn: cn=group{{ item }},ou=groups,dc=acmecorp,dc=com
+          changetype: modify
+          add: memberuid
+          memberuid: user{{ item }}
+          EOF
+          docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/user{{ item }}_to_group{{ item }}.ldif
+      with_sequence: count=4
 
     - name: Pull latest image
       tags: [start-setup, repull-quay]
@@ -322,9 +474,70 @@
           - "{{ quay_https_port }}:8443"
           - "9091:9091"
           - "9092:9092"
+          - "8787:8787"
           - "1234:1234"
           - "2345:2345"
           - "2346:2346"
+        etc_hosts:
+          thomasmckay.usersys.redhat.com: 192.168.1.119
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+        network_mode: host
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    - name: Quay Builder certs
+      tags: [finish-setup, restart-builder]
+      shell:
+        cmd: |
+          cp {{ volumes_dir }}/certs/rootCA.crt {{ volumes_dir }}/quay-builder/certs
+
+
+    - name: Quay Builder container
+      tags: [finish-setup, restart-quay, restart-all, restart-builder]
+      docker_container:
+        name: quay-builder
+        image:  quay-builder:v3.2.0-3
+        user: "0:0"
+        volumes:
+          - "/var/run/docker.sock:/var/run/docker.sock"
+          - "{{ volumes_dir }}/quay-builder/certs:/certs:Z"
+        env:
+          SERVER: "ws://{{ quay_host }}:8787"
+        etc_hosts:
+          thomasmckay.usersys.redhat.com: 192.168.1.119
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+        network_mode: host
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+    - name: Quay Registry 3.2 container
+      tags: [quay-3.2]
+      docker_container:
+        name: quay-3.2
+        image:  quay.io/redhat/quay:v3.2.1
+        volumes:
+          - "{{ volumes_dir }}/quay-config:/conf/stack"
+          - "{{ volumes_dir }}/quay-storage/local:/datastorage"
+          - "/home/thomasmckay/code/quay-devel:/home/thomasmckay/code/quay-devel"
+        env:
+          QUAYENTRY: registry
+          DEBUGLOG: "true"
+          QUAY_OVERRIDE_SERVICES: "repomirrorworker=true"
+        ports:
+          - "{{ quay_http_port }}:7080"
+          - "{{ quay_https_port }}:7443"
         etc_hosts:
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
@@ -528,3 +741,6 @@
       tags: [finish-setup]
       command: "xdg-open http://{{ quay_host }}:9000"
 
+    # - name: "Open browser: OpenLDAP"
+    #   tags: [finish-setup]
+    #   command: "xdg-open http://{{ quay_host }}:6443"
