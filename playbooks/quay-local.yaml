@@ -300,30 +300,6 @@
       retries: 5
       delay: 10
 
-    - name: OpenLDAP Admin container
-      # Admin container cannot connect to ldap, unsure why
-      tags: [dont-start] #[restart-openldap]
-      docker_container:
-        name: quay-openldap-admin
-        image: osixia/phpldapadmin
-        env:
-          PHPLDAPADMIN_LDAP_HOSTS: "{{ quay_host }}"
-        ports:
-          - "6080:80"
-          - "6443:443"
-        keep_volumes: true
-        auto_remove: true
-        state: started
-        restart: true
-        etc_hosts:
-          # This does not expand the hostname that lands in /etc/hosts
-          # "{{ quay_host }}": "{{ quay_ip }}"
-          thomasmckay.usersys.redhat.com: 192.168.1.119
-      register: result
-      until: result is succeeded
-      retries: 5
-      delay: 10
-
     # To generate password: docker exec -it quay-openldap slappasswd -h {SSHA}
     # Searches:
     #   -b dc=acmecorp,dc=com "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=acmecorp,dc=com))"
@@ -332,6 +308,15 @@
       shell:
         cmd: |
           sudo chmod -R a+rwx {{ volumes_dir }}/openldap
+
+          # cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/memberof.ldif
+          # dn: olcOverlay=memberof,olcDatabase={1}mdb,cn=config
+          # objectClass: olcOverlayConfig
+          # objectClass: olcMemberOf
+          # olcOverlay: memberof
+          # olcMemberOfRefint: TRUE
+          # EOF
+          # docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/memberof.ldif
 
           cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/base.ldif
           dn: ou=users,dc=acmecorp,dc=com
@@ -379,7 +364,7 @@
           dn: cn=group{{ item }},ou=groups,dc=acmecorp,dc=com
           objectClass: top
           objectClass: groupOfUniqueNames
-          gidNumber: {{ item }}{{ item }}{{ item }}
+          uniqueMember: uid=admin,ou=users,dc=acmecorp,dc=com
           EOF
           docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/group{{ item }}.ldif
       with_sequence: count=4
@@ -391,8 +376,8 @@
           cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/user{{ item }}_to_group{{ item }}.ldif
           dn: cn=group{{ item }},ou=groups,dc=acmecorp,dc=com
           changetype: modify
-          add: memberuid
-          memberuid: user{{ item }}
+          add: uniqueMember
+          uniqueMember: cn=user{{ item }},ou=users,dc=acmecorp,dc=com
           EOF
           docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/user{{ item }}_to_group{{ item }}.ldif
       with_sequence: count=4
@@ -740,7 +725,3 @@
     - name: "Open browser: MinIO"
       tags: [finish-setup]
       command: "xdg-open http://{{ quay_host }}:9000"
-
-    # - name: "Open browser: OpenLDAP"
-    #   tags: [finish-setup]
-    #   command: "xdg-open http://{{ quay_host }}:6443"
