@@ -271,6 +271,9 @@
         - openldap/config
         - openldap/database
 
+    # To communicate with this server, the ip address needs to be used in config
+    #   docker inspect -f "{{ .NetworkSettings.IPAddress }}" quay-openldap
+    # Not sure why
     - name: OpenLDAP container
       # No start-setup tag until working
       tags: [restart-openldap]
@@ -300,87 +303,71 @@
       retries: 5
       delay: 10
 
-    # To generate password: docker exec -it quay-openldap slappasswd -h {SSHA}
+    # Helper:
+    #   alias qdappasswd="docker exec quay-openldap ldappasswd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+    #   alias qdapmodify="docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+    #   alias qdapadd="docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+    #   alias qdapsearch="docker exec quay-openldap ldapsearch -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+    # Passwords:
+    #   quayldap uid=john,ou=users,dc=acmecorp,dc=com
+    #   docker exec -it quay-openldap slappasswd -h {SSHA}
     # Searches:
-    #   -b dc=acmecorp,dc=com "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=acmecorp,dc=com))"
+    #   quayldap -b dc=acmecorp,dc=com "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=acmecorp,dc=com))"
     - name: Initialize OpenLDAP
       tags: [setup-openldap]
       shell:
         cmd: |
           sudo chmod -R a+rwx {{ volumes_dir }}/openldap
 
-          # cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/memberof.ldif
-          # dn: olcOverlay=memberof,olcDatabase={1}mdb,cn=config
-          # objectClass: olcOverlayConfig
-          # objectClass: olcMemberOf
-          # olcOverlay: memberof
-          # olcMemberOfRefint: TRUE
-          # EOF
-          # docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/memberof.ldif
-
-          cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/base.ldif
-          dn: ou=users,dc=acmecorp,dc=com
+          cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/setup-openldap.ldif
+          dn: ou=Users,dc=acmecorp,dc=com
+          objectClass: top
           objectClass: organizationalUnit
-          objectClass: top
-          ou: users
+          ou: Users
 
-          dn: ou=groups,dc=acmecorp,dc=com
+          dn: ou=Groups,dc=acmecorp,dc=com
+          objectClass: top
           objectClass: organizationalUnit
-          objectClass: top
-          ou: groups
-          EOF
-          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/base.ldif
+          ou: Groups
 
-    - name: OpenLDAP Users
-      tags: [setup-openldap]
-      shell:
-        cmd: |
-          cat <<EOF > {{ volumes_dir }}/openldap/config/user{{ item }}.ldif
-          dn: uid=user{{ item }},ou=users,dc=acmecorp,dc=com
+          dn: uid=billy,dc=acmecorp,dc=com
+          uid: billy
+          cn: billy
+          sn: 3
           objectClass: top
-          objectClass: account
           objectClass: posixAccount
-          objectClass: shadowAccount
-          cn: user{{ item }}
-          uid: user{{ item }}
-          uidNumber: 1111{{ item }}
-          gidNumber: 100
-          homeDirectory: /home/user{{ item }}
+          objectClass: inetOrgPerson
           loginShell: /bin/bash
-          gecos: user{{ item }}
-          userPassword: {SSHA}Loo/AhflWy4tg4S/E7+MEXTCDH4yTtyB
-          shadowLastChange: 0
-          shadowMax: 0
-          shadowWarning: 0
-          EOF
-          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/user{{ item }}.ldif
-      with_sequence: count=4
+          homeDirectory: /home/billy
+          uidNumber: 14583102
+          gidNumber: 14564100
+          userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
+          mail: billy@acmecorp.com
+          gecos: Billy User
 
-    - name: OpenLDAP Groups
-      tags: [setup-openldap]
-      shell:
-        cmd: |
-          cat <<EOF > {{ volumes_dir }}/openldap/config/group{{ item }}.ldif
-          dn: cn=group{{ item }},ou=groups,dc=acmecorp,dc=com
+          dn: uid=john,ou=Users,dc=acmecorp,dc=com
+          uid: john
+          cn: john
+          sn: 3
           objectClass: top
-          objectClass: groupOfUniqueNames
-          uniqueMember: uid=admin,ou=users,dc=acmecorp,dc=com
-          EOF
-          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/group{{ item }}.ldif
-      with_sequence: count=4
+          objectClass: posixAccount
+          objectClass: inetOrgPerson
+          loginShell: /bin/bash
+          homeDirectory: /home/john
+          uidNumber: 14583103
+          gidNumber: 14564101
+          userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
+          mail: john@acmecorp.com
+          gecos: John User
 
-    - name: OpenLDAP Users to Groups
-      tags: [setup-openldap]
-      shell:
-        cmd: |
-          cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/user{{ item }}_to_group{{ item }}.ldif
-          dn: cn=group{{ item }},ou=groups,dc=acmecorp,dc=com
-          changetype: modify
-          add: uniqueMember
-          uniqueMember: cn=user{{ item }},ou=users,dc=acmecorp,dc=com
+          dn: cn=admin,ou=Groups,dc=acmecorp,dc=com
+          objectClass: groupOfUniqueNames
+          cn: admin
+          description: Admin users
+          uniqueMember: uid=admin,dc=acmecorp,dc=com
+          uniqueMember: uid=john,ou=Users,dc=acmecorp,dc=com
           EOF
-          docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/user{{ item }}_to_group{{ item }}.ldif
-      with_sequence: count=4
+          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/setup-openldap.ldif
 
     - name: Pull latest image
       tags: [start-setup, repull-quay]
@@ -725,3 +712,7 @@
     - name: "Open browser: MinIO"
       tags: [finish-setup]
       command: "xdg-open http://{{ quay_host }}:9000"
+
+    - name: "Open browser: Github Apps"
+      tags: [finish-setup]
+      command: "xdg-open https://github.com/settings/apps/quay-development"
