@@ -7,7 +7,9 @@
 # docker run -it --rm --network=host -v /home/thomasmckay/quay-volumes/quay-config:/conf/stack -v /home/thomasmckay/quay-volumes/quay-storage/local:/datastorage quay.io/redhat/quay:v3.1.2 registry
 #
 - hosts: localhost
+  gather_facts: no
   vars:
+    ansible_python_interpreter: /bin/python3
     quay_host: thomasmckay.usersys.redhat.com
     quay_ip: 192.168.1.119
     quay_image: quay.io/redhat/quay:v3.1.2
@@ -18,6 +20,10 @@
     downloads_dir: /home/thomasmckay/Downloads
     quay_http_port: 8080
     quay_https_port: 8443
+    ldap_auth:
+      server_uri: ldap://thomasmckay.usersys.redhat.com:3389
+      bind_dn: cn=admin,dc=example,dc=com
+      bind_pw: changeme
 
   tasks:
     - name: Stop docker processes
@@ -25,7 +31,7 @@
       ignore_errors: true
       shell:
         cmd: |
-          docker kill quay-postgresql quay-redis quay-config quay clair grafana prometheus swagger quay-minio
+          docker kill quay-postgresql quay-redis quay-config quay clair grafana prometheus swagger quay-minio quay-openldap
     - name: Stop docker processes
       tags: [redeploy-clair]
       ignore_errors: true
@@ -34,7 +40,7 @@
           docker kill clair
 
     - name: Remove prior data and volume folders
-      tags: [teardown, start-setup]
+      tags: [start-setup, create-dirs]
       command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
       args:
         removes: "{{ volumes_dir }}/{{ item }}"
@@ -50,7 +56,7 @@
         - openldap
 
     - name: Create volume folders
-      tags: [start-setup]
+      tags: [start-setup, create-dirs]
       file:
         path: "{{ volumes_dir }}/{{ item }}"
         state: directory
@@ -61,6 +67,7 @@
         - quay-storage/minio
         - openldap/config
         - openldap/database
+        - openldap/certs
         - quay-config
         - clair-config
         - quay-builder/certs
@@ -77,7 +84,7 @@
         - security_scanner.pem
 
     - name: Create TLS cert and key
-      tags: [start-setup]
+      tags: [start-setup, create-certs]
       shell:
         cmd: |
           # Root CA
@@ -248,14 +255,14 @@
           aws --endpoint-url http://{{ quay_host }}:9000 --no-verify-ssl s3 mb s3://quay-bucket-2
 
     - name: Stop OpenLDAP containers
-      tags: [restart-openldap]
+      tags: [restart-openldap, start-setup]
       ignore_errors: true
       shell:
         cmd: |
           docker kill quay-openldap
 
     - name: Remove prior OpenLDAP data and volume folders
-      tags: [restart-openldap]
+      tags: [restart-openldap, start-setup]
       command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
       args:
         removes: "{{ volumes_dir }}/{{ item }}"
@@ -263,33 +270,50 @@
         - openldap
 
     - name: Create OpenLDAP volume folders
-      tags: [restart-openldap]
+      tags: [restart-openldap, start-setup]
       file:
         path: "{{ volumes_dir }}/{{ item }}"
         state: directory
       with_items:
         - openldap/config
         - openldap/database
+        - openldap/certs
 
-    # To communicate with this server, the ip address needs to be used in config
-    #   docker inspect -f "{{ .NetworkSettings.IPAddress }}" quay-openldap
-    # Not sure why
+    - name: Initialize OpenLDAP
+      tags: [restart-openldap, start-setup]
+      shell:
+        cmd: |
+          cp {{ volumes_dir }}/certs/quay.crt {{ volumes_dir }}/openldap/certs/ca.crt
+
+
+          # cp {{ volumes_dir }}/certs/rootCA.crt {{ volumes_dir }}/openldap/certs/ca.crt
+          # cp {{ volumes_dir }}/certs/quay.crt {{ volumes_dir }}/openldap/certs/ldap.crt
+          # cp {{ volumes_dir }}/certs/quay.key {{ volumes_dir }}/openldap/certs/ldap.key
+
+    # docker run -it --rm --name=quay-openldap -v /home/thomasmckay/quay-volumes/openldap/config:/etc/ldap/slapd.d -v /home/thomasmckay/quay-volumes/openldap/database:/var/lib/ldap -e LDAP_ADMIN_PASSWORD=changeme -e LDAP_ORGANISATION=example -e LDAP_DOMAIN=example.com -e LDAP_BASE_DN="dc=example,dc=com" -e LDAP_TLS=true -e LDAP_TLS_ENFORCE=true -e LDAP_TLS_VERIFY_CLIENT=always osixia/openldap:1.3.0
+    #
+    # Examples:
+    # ldapsearch -H ldap://thomasmckay.usersys.redhat.com:3389 /home/thomasmckay/quay-volumes/openldap/certs/ca.crt -D cn=admin,dc=example,dc=com -w changeme -b dc=example,dc=com
+    # ldapsearch -ZZ -H ldaps://thomasmckay.usersys.redhat.com:6636 /home/thomasmckay/quay-volumes/openldap/certs/ca.crt -D cn=admin,dc=example,dc=com -w changeme -b dc=example,dc=com
     - name: OpenLDAP container
       # No start-setup tag until working
-      tags: [restart-openldap]
+      tags: [restart-openldap, start-setup]
       docker_container:
         name: quay-openldap
-        image: osixia/openldap:1.3.0
+        # https://github.com/osixia/docker-openldap/pull/416
+        image: osixia/openldap:pr416
+        # LDAP_TLS_ENFORCE: true  # This will require ldaps
         env:
           LDAP_ADMIN_PASSWORD: changeme
-          LDAP_ORGANISATION: acmecorp
-          LDAP_DOMAIN: acmecorp.com
-          LDAP_BASE_DN: "dc=acmecorp,dc=com"
+          LDAP_ORGANISATION: example
+          LDAP_DOMAIN: example.com
+          LDAP_BASE_DN: "dc=example,dc=com"
         volumes:
           - "{{ volumes_dir }}/openldap/config:/etc/ldap/slapd.d"
           - "{{ volumes_dir }}/openldap/database:/var/lib/ldap"
         ports:
-          - "389:389"
+          - "3389:389"
+          - "6636:636"
         keep_volumes: true
         auto_remove: true
         state: started
@@ -303,16 +327,102 @@
       retries: 5
       delay: 10
 
+    - name: Initialize OpenLDAP
+      tags: [XXXrestart-openldap, XXXstart-setup]
+      shell:
+        cmd: |
+          docker exec -it quay-openldap bash -c "cp /container/service/slapd/assets/certs/* /tmp/certs/"
+
+    # https://en.wikipedia.org/wiki/States_and_union_territories_of_India#States
+    # https://en.wikipedia.org/wiki/List_of_states_and_territories_of_the_United_States#States
+    - name: OpenLDAP groups
+      tags: [restart-openldap, start-setup]
+      ldap_entry:
+        dn: ou={{ item }},dc=example,dc=com
+        objectClass: organizationalUnit
+        params: "{{ ldap_auth }}"
+      with_items:
+        - users
+        - groups
+
+    - name: OpenLDAP States
+      tags: [restart-openldap, start-setup]
+      ldap_entry:
+        dn: uid={{ item.state }},ou=users,dc=example,dc=com
+        objectClass:
+          - posixAccount
+          - inetOrgPerson
+        attributes:
+          uid: "{{ item.state }}"
+          cn: "{{ item.state }}"
+          sn: 3
+          loginShell: /bin/bash
+          homeDirectory: /home/{{ item.state }}
+          uidNumber: "{{ item.uuid }}"
+          gidNumber: 111
+          userPassword: "{SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6"
+          mail: "{{ item.state }}@example.com"
+          gecos: "{{ item.state }}"
+        params: "{{ ldap_auth }}"
+      with_items:
+        - { country: superuser,    state: admin,   uuid: 111 }
+        - { country: unitedstates, state: newyork, uuid: 221 }
+        - { country: unitedstates, state: vermont, uuid: 222 }
+        - { country: unitedstates, state: ohio,    uuid: 223 }
+        - { country: india,        state: bihar,   uuid: 331 }
+        - { country: india,        state: gujarat, uuid: 332 }
+        - { country: india,        state: punjab,  uuid: 333 }
+
+    - name: OpenLDAP Countries
+      tags: [restart-openldap, start-setup]
+      ldap_entry:
+        dn: cn={{ item.country }},ou=groups,dc=example,dc=com
+        objectClass: groupOfUniqueNames
+        attributes:
+          cn: "{{ item.country }}"
+          uniqueMember: uid=admin,ou=users,dc=example,dc=com
+        params: "{{ ldap_auth }}"
+      with_items:
+        - { country: unitedstates }
+        - { country: india }
+        - { country: superuser }
+
+    - name: OpenLDAP add States to Countries
+      tags: [restart-openldap, start-setup]
+      ldap_attr:
+        dn: cn={{ item.country }},ou=groups,dc=example,dc=com
+        name: uniqueMember
+        values: uid={{ item.state }},ou=users,dc=example,dc=com
+        params: "{{ ldap_auth }}"
+      with_items:
+        - { country: superuser,    state: admin,   uuid: 111 }
+        - { country: unitedstates, state: newyork, uuid: 221 }
+        - { country: unitedstates, state: vermont, uuid: 222 }
+        - { country: unitedstates, state: ohio,    uuid: 223 }
+        - { country: india,        state: bihar,   uuid: 331 }
+        - { country: india,        state: gujarat, uuid: 332 }
+        - { country: india,        state: punjab,  uuid: 333 }
+
+    # - name: OpenLDAP users
+    #   tags: [testing-openldap]
+    #   ldap_entry:
+    #     dn: ou={{ item }},dc=example,dc=com
+    #     objectClass: organizationalUnit
+    #     params: "{{ ldap_auth }}"
+    #   with_items:
+    #     - { country: unitedstates, state: newyork }
+
     # Helper:
-    #   alias qdappasswd="docker exec quay-openldap ldappasswd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
-    #   alias qdapmodify="docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
-    #   alias qdapadd="docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
-    #   alias qdapsearch="docker exec quay-openldap ldapsearch -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+    #   alias qdappasswd="docker exec quay-openldap ldappasswd -x -H ldap://localhost -D cn=admin,dc=example,dc=com -w changeme "
+    #   alias qdapmodify="docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=example,dc=com -w changeme "
+    #   alias qdapadd="docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=example,dc=com -w changeme "
+    #   alias qdapsearch="docker exec quay-openldap ldapsearch -x -H ldap://localhost -D cn=admin,dc=example,dc=com -w changeme "
     # Passwords:
-    #   quayldap uid=john,ou=users,dc=acmecorp,dc=com
+    #   quayldap uid=john,ou=users,dc=example,dc=com
     #   docker exec -it quay-openldap slappasswd -h {SSHA}
     # Searches:
-    #   quayldap -b dc=acmecorp,dc=com "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=acmecorp,dc=com))"
+    #   qdapsearch -b dc=example,dc=com "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=example,dc=com))"
+    #   qdapsearch -b dc=example,dc=com "(memberof=cn=india,ou=groups,dc=example,dc=com)"
     - name: Initialize OpenLDAP
       tags: [setup-openldap]
       shell:
@@ -320,54 +430,69 @@
           sudo chmod -R a+rwx {{ volumes_dir }}/openldap
 
           cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/setup-openldap.ldif
-          dn: ou=Users,dc=acmecorp,dc=com
+          dn: ou=users,dc=example,dc=com
           objectClass: top
           objectClass: organizationalUnit
-          ou: Users
+          ou: users
 
-          dn: ou=Groups,dc=acmecorp,dc=com
+          dn: ou=groups,dc=example,dc=com
           objectClass: top
           objectClass: organizationalUnit
-          ou: Groups
+          ou: groups
 
-          dn: uid=billy,dc=acmecorp,dc=com
-          uid: billy
-          cn: billy
+          dn: uid=admin,dc=example,dc=com
+          uid: admin
+          cn: admin
           sn: 3
           objectClass: top
           objectClass: posixAccount
           objectClass: inetOrgPerson
           loginShell: /bin/bash
-          homeDirectory: /home/billy
+          homeDirectory: /home/admin
+          uidNumber: 14583100
+          gidNumber: 14564100
+          userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
+          mail: admin@example.com
+          gecos: Admin User
+
+          dn: uid=barbeque,dc=example,dc=com
+          uid: barbeque
+          cn: barbeque
+          sn: 3
+          objectClass: top
+          objectClass: posixAccount
+          objectClass: inetOrgPerson
+          loginShell: /bin/bash
+          homeDirectory: /home/barbeque
           uidNumber: 14583102
           gidNumber: 14564100
           userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
-          mail: billy@acmecorp.com
-          gecos: Billy User
+          mail: barbeque@example.com
+          gecos: Barbeque User
 
-          dn: uid=john,ou=Users,dc=acmecorp,dc=com
-          uid: john
-          cn: john
+          dn: uid=curry,ou=users,dc=example,dc=com
+          uid: curry
+          cn: curry
           sn: 3
           objectClass: top
           objectClass: posixAccount
           objectClass: inetOrgPerson
           loginShell: /bin/bash
-          homeDirectory: /home/john
+          homeDirectory: /home/curry
           uidNumber: 14583103
           gidNumber: 14564101
           userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
-          mail: john@acmecorp.com
-          gecos: John User
+          mail: curry@example.com
+          gecos: Curry User
 
-          dn: cn=admin,ou=Groups,dc=acmecorp,dc=com
+          dn: cn=admin,ou=groups,dc=example,dc=com
           objectClass: groupOfUniqueNames
           cn: admin
           description: Admin users
-          uniqueMember: uid=admin,dc=acmecorp,dc=com
-          uniqueMember: uid=john,ou=Users,dc=acmecorp,dc=com
+          uniqueMember: uid=admin,ou=users,dc=example,dc=com
+          uniqueMember: uid=curry,ou=users,dc=example,dc=com
           EOF
-          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/setup-openldap.ldif
+          docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=example,dc=com -w changeme -f /etc/ldap/slapd.d/setup-openldap.ldif
 
     - name: Pull latest image
       tags: [start-setup, repull-quay]
@@ -383,7 +508,7 @@
         image: "{{ quay_image }}"
         volumes:
           - "{{ volumes_dir }}/quay-config:/conf/stack"
-          - "{{ volumes_dir }}/quay-storage/local:/datastorage"
+          - "{{ volumes_dir }}/quay-storage/local:/datastorage:Z"
           - "/home/thomasmckay/code/quay-devel:/home/thomasmckay/code/quay-devel"
         env:
           QUAYENTRY: config
@@ -428,14 +553,16 @@
         cmd: |
           docker pull {{ quay_image }}
 
+    # docker run -it --rm -v /home/thomasmckay/quay-volumes/quay-config:/conf/stack -v /home/thomasmckay/quay-volumes/quay-storage:/datastorage -p 8080:8080 -p 8443:8443 --add-host thomasmckay.usersys.redhat.com:192.168.1.119 quay.io/thomasmckay/projquay:devel
+    #
     - name: Quay Registry container
       tags: [finish-setup, restart-quay, restart-all]
       docker_container:
         name: quay
-        image:  "{{ quay_image }}"
+        image: "{{ quay_image }}"
         volumes:
           - "{{ volumes_dir }}/quay-config:/conf/stack"
-          - "{{ volumes_dir }}/quay-storage/local:/datastorage"
+          - "{{ volumes_dir }}/quay-storage/local:/datastorage:Z"
           - "/home/thomasmckay/code/quay-devel:/home/thomasmckay/code/quay-devel"
         env:
           QUAYENTRY: registry
@@ -463,36 +590,6 @@
       retries: 5
       delay: 10
 
-    - name: Quay Builder certs
-      tags: [finish-setup, restart-builder]
-      shell:
-        cmd: |
-          cp {{ volumes_dir }}/certs/rootCA.crt {{ volumes_dir }}/quay-builder/certs
-
-
-    - name: Quay Builder container
-      tags: [finish-setup, restart-quay, restart-all, restart-builder]
-      docker_container:
-        name: quay-builder
-        image:  quay-builder:v3.2.0-3
-        user: "0:0"
-        volumes:
-          - "/var/run/docker.sock:/var/run/docker.sock"
-          - "{{ volumes_dir }}/quay-builder/certs:/certs:Z"
-        env:
-          SERVER: "ws://{{ quay_host }}:8787"
-        etc_hosts:
-          thomasmckay.usersys.redhat.com: 192.168.1.119
-          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-        network_mode: host
-        keep_volumes: true
-        auto_remove: true
-        state: started
-        restart: true
-      register: result
-      until: result is succeeded
-      retries: 5
-      delay: 10
 
     - name: Quay Registry 3.2 container
       tags: [quay-3.2]
@@ -501,7 +598,7 @@
         image:  quay.io/redhat/quay:v3.2.1
         volumes:
           - "{{ volumes_dir }}/quay-config:/conf/stack"
-          - "{{ volumes_dir }}/quay-storage/local:/datastorage"
+          - "{{ volumes_dir }}/quay-storage/local:/datastorage:Z"
           - "/home/thomasmckay/code/quay-devel:/home/thomasmckay/code/quay-devel"
         env:
           QUAYENTRY: registry
@@ -530,7 +627,7 @@
         image: "{{ quay_image }}"
         volumes:
           - "{{ volumes_dir }}/quay-config:/conf/stack"
-          - "{{ volumes_dir }}/quay-storage/local:/datastorage"
+          - "{{ volumes_dir }}/quay-storage/local:/datastorage:Z"
           - "/home/thomasmckay/code/quay:/home/thomasmckay/code/quay"
         env:
           QUAYENTRY: repomirror
@@ -538,6 +635,8 @@
         ports:
           - "9980:8080"
           - "9943:8443"
+          - "9991:9091"
+          - "9992:9092"
         etc_hosts:
           thomasmckay.usersys.redhat.com: 192.168.1.119
           thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
@@ -679,6 +778,39 @@
       retries: 5
       delay: 10
 
+
+    - name: Quay Builder certs
+      tags: [finish-setup, restart-builder]
+      shell:
+        cmd: |
+          cp {{ volumes_dir }}/certs/rootCA.crt {{ volumes_dir }}/quay-builder/certs
+
+
+    - name: Quay Builder container
+      tags: [finish-setup, restart-quay-builder, restart-all, restart-builder]
+      docker_container:
+        name: quay-builder
+        image:  quay-builder:v3.2.0-3
+        user: "0:0"
+        volumes:
+          - "/var/run/docker.sock:/var/run/docker.sock"
+          - "{{ volumes_dir }}/quay-builder/certs:/certs:Z"
+        env:
+          SERVER: "ws://{{ quay_host }}:8787"
+        etc_hosts:
+          thomasmckay.usersys.redhat.com: 192.168.1.119
+          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
+        network_mode: host
+        keep_volumes: true
+        auto_remove: true
+        state: started
+        restart: true
+      register: result
+      until: result is succeeded
+      retries: 5
+      delay: 10
+
+
     - name: Swagger container
       tags: [finish-setup, restart-all, restart-swagger]
       docker_container:
@@ -697,6 +829,7 @@
       retries: 5
       delay: 10
 
+
     - name: "Open browser: Quay"
       tags: [finish-setup]
       command: "xdg-open https://{{ quay_host }}:8443"
@@ -714,5 +847,5 @@
       command: "xdg-open http://{{ quay_host }}:9000"
 
     - name: "Open browser: Github Apps"
-      tags: [finish-setup]
+      tags: [start-setup]
       command: "xdg-open https://github.com/settings/apps/quay-development"
