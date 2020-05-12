@@ -12,7 +12,7 @@ jobs:
         repo-token: "${{ secrets.GITHUB_TOKEN }}"
 
         # required - regex to match text from the head branch name
-        branch-regex: 'foo-\d+'
+        branch-regex: '.+'
 
         # optional - whether to lowercase branch name before matching
         lowercase-branch: true
