@@ -1,0 +1,42 @@
+name: "Update Pull Request"
+
+on: pull_request
+
+jobs:
+  update_pr:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: thomasmckay/pr-update-action@master
+      with:
+        # required - allows the action to make calls to GitHub's rest API
+        repo-token: "${{ secrets.GITHUB_TOKEN }}"
+
+        # required - regex to match text from the head branch name
+        branch-regex: 'foo-\d+'
+
+        # optional - whether to lowercase branch name before matching
+        lowercase-branch: true
+
+        # required - text template to update title with
+        title-template: '[%branch%]'
+
+        # optional - whether to prefix or replace title with title-template
+        replace-title: false
+
+        # optional - whether to add a space after title prefix
+        title-prefix-space: true
+
+        # optional - whether to uppercase matched branch info in title
+        uppercase-title: true
+
+        # required - text template to prefix body
+        body-template: '[%branch%](https://browse/ticket/%branch%)'
+
+        # optional - whether to prefix or replace body with body-template
+        replace-body: false
+
+        # optional - number of newlines to insert after body prefix
+        body-prefix-newline-count: 2
+
+        # optional - whether to uppercase matched branch info in body
+        uppercase-body: true
