@@ -1,7 +1,0 @@
-apiVersion: quay.io/v1alpha1
-kind: Quay
-metadata:
-  name: quay-enterprise
-spec:
-  size: 1
-  name: quay-enterprise

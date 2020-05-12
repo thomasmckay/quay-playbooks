@@ -1,0 +1,92 @@
+---
+- name: Pull latest image
+  tags: [pull-latest, repull-clair]
+  shell:
+    cmd: |
+      podman pull {{ clair_image }}
+
+
+# https://github.com/quay/clair/blob/development-4.0/config.yaml.sample
+- name: Create clair config.yaml
+  tags: [finish-setup, redeploy-clair]
+  vars:
+    quay_endpoint: "{{ quay_host }}:8443"
+    clair_endpoint: "{{ quay_host }}"
+  shell:
+    cmd: |
+      cp {{ volumes_dir }}/certs/rootCA.crt {{ volumes_dir }}/clair-certs/rootCA.crt
+      cp {{ volumes_dir }}/quay-config/security_scanner.pem {{ volumes_dir }}/clair-config/security_scanner.pem
+      cp {{ volumes_dir }}/certs/clair.crt {{ volumes_dir }}/clair-config
+      cp {{ volumes_dir }}/certs/clair.key {{ volumes_dir }}/clair-config
+      cp {{ volumes_dir }}/certs/quay.crt {{ volumes_dir }}/clair-config
+      cp {{ volumes_dir }}/certs/quay.key {{ volumes_dir }}/clair-config
+      cat <<EOF > {{ volumes_dir }}/clair-config/config.yaml
+      introspection_addr: {{ quay_host }}:6061
+      http_listen_addr: {{ quay_host }}:6060
+      log_level: debug
+      indexer:
+        connstring: "host={{ quay_host }} port=5433 user=clair password=clair dbname=clair sslmode=disable"
+        scanlock_retry: 10
+        layer_scan_concurrency: 5
+        migrations: true
+      matcher:
+        connstring: "host={{ quay_host }} port=5433 user=clair password=clair dbname=clair sslmode=disable"
+        max_conn_pool: 100
+        run: ""
+        migrations: true
+        updater_sets:
+        - "pyupio"
+        - "rhel"
+      notifier:
+        connstring: "host={{ quay_host }} port=5433 user=clair password=clair dbname=clair sslmode=disable"
+        migrations: true
+        poll_interval: "30s"
+        delivery_interval: "30s"
+      metrics:
+        name: "prometheus"
+      EOF
+
+
+- name: Drop Postgresql 'clair' database
+  tags: [finish-setup, redeploy-clair]
+  shell:
+    cmd: |
+      podman exec quay-postgresql bash -l -c 'dropdb clair'
+  register: result
+  ignore_errors: yes
+
+
+- name: Postgresql 'clair' database
+  tags: [finish-setup, redeploy-clair]
+  shell:
+    cmd: |
+      podman exec quay-postgresql bash -l -c 'createdb clair'
+  register: result
+  ignore_errors: yes
+
+
+- name: Clair container
+  tags: [finish-setup, restart-clair, redeploy-clair, restart-all]
+  containers.podman.podman_container:
+    name: clair
+    image: "{{ clair_image }}"
+    volumes:
+      - "{{ volumes_dir }}/clair-config:/clair/config:Z"
+      - "{{ volumes_dir }}/certs/rootCA.crt:/etc/pki/ca-trust/source/anchors/rootCA.crt"
+    env:
+      SSL_CERT_DIR: /clair/config
+      CLAIR_CONF: /clair/config/config.yaml
+      CLAIR_MODE: combo
+      # see TODO in certs
+      GODEBUG: x509ignoreCN=0
+    ports:
+      - "6060:6060"
+      - "6061:6061"
+    network: host
+    rm: true
+    state: started
+    restart: true
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 10

@@ -1,0 +1,34 @@
+---
+# podman run --rm -it --name quay-devel -v /home/thomasmckay/quay-volumes/quay-config:/conf/stack:Z -v /home/thomasmckay/quay-volumes/quay-storage:/datastorage:Z -p 8443:8443 -p 8080:8080 --network=host quay.io/thomasmckay/quay:pr533 shell
+- name: quay container
+  tags: [finish-setup, restart-quay, restart-all]
+  containers.podman.podman_container:
+    name: quay
+    image:  "{{ quay_image }}"
+    volumes:
+      - "{{ volumes_dir }}/quay-config:/conf/stack:Z"
+      - "{{ volumes_dir }}/quay-storage/local:/datastorage:Z"
+      - "/home/thomasmckay/code/quay-devel:/home/thomasmckay/code/quay-devel:Z"
+    env:
+      QUAYENTRY: registry
+      DEBUGLOG: "true"
+      QUAY_OVERRIDE_SERVICES: "repomirrorworker=true"
+      # see TODO in certs
+      # GODEBUG: x509ignoreCN=0
+    ports:
+      - "{{ quay_http_port }}:8080"
+      - "{{ quay_https_port }}:8443"
+      - "9091:9091"
+      - "9092:9092"
+      - "8787:8787"
+      - "1234:1234"
+      - "2345:2345"
+      - "2346:2346"
+    network: host
+    rm: true
+    state: started
+    restart: true
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 10

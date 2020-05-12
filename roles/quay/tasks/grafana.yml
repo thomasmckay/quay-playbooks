@@ -1,0 +1,14 @@
+---
+- name: grafana container
+  tags: [finish-setup, restart-all, redeploy-grafana, restart-grafana]
+  containers.podman.podman_container:
+    name: grafana
+    image: registry.redhat.io/openshift3/grafana:v3.11
+    user: "0:0"
+    #volumes:
+    #  - "{{ volumes_dir }}/prometheus:/var/lib/grafana"
+    ports:
+      - "8666:3000"
+    rm: true
+    state: started
+    restart: true

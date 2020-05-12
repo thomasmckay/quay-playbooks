@@ -1,0 +1,12 @@
+---
+volumes_dir: /home/thomasmckay/quay-volumes
+downloads_dir: /home/thomasmckay/Downloads
+
+quay_image: quay.io/quay/quay:v3.4.0
+clair_image: quay.io/quay/clair:v3.4.0
+
+quay_host: quay.example.org
+quay_http_port: 8080
+quay_https_port: 8443
+
+ansible_python_interpreter: /usr/bin/python3

@@ -1,0 +1,66 @@
+---
+- name: Create volume folders
+  tags: [start-setup]
+  file:
+    path: "{{ volumes_dir }}/{{ item }}"
+    state: directory
+    mode: "a+rwx"
+  with_items:
+    - quay-redis
+    - quay-postgresql
+    - quay-postgresql-replica
+    - clair-postgresql
+    - quay-storage/local
+    - quay-storage/minio
+    - openldap/config
+    - openldap/database
+    - openldap/certs
+    - quay-config
+    - quay-config/extra_ca_certs
+    - clair-config
+    - quay-builder/certs
+    - certs
+    - prometheus
+
+- name: Remove old Downloads
+  tags: [start-setup]
+  file:
+    path: "{{ downloads_dir }}/{{ item }}"
+    state: absent
+  with_items:
+    - quay-config.tar.gz
+
+
+- name: Install config
+  tags: [finish-setup]
+  shell:
+    cmd: |
+      mv {{ downloads_dir }}/quay-config.tar.gz {{ volumes_dir }}/quay-config/quay-config.tar.gz
+      tar xvf {{ volumes_dir }}/quay-config/quay-config.tar.gz -C {{ volumes_dir }}/quay-config
+  ignore_errors: yes
+
+
+- name: Allow Swagger to query API
+  tags: [finish-setup]
+  lineinfile:
+    path: "{{ volumes_dir }}/quay-config/config.yaml"
+    regexp: "^BROWSER_API_CALLS_XHR_ONLY:"
+    line: "BROWSER_API_CALLS_XHR_ONLY: false"
+
+
+- name: OCI Feature
+  tags: [finish-setup]
+  lineinfile:
+    path: "{{ volumes_dir }}/quay-config/config.yaml"
+    regexp: "^FEATURE_GENERAL_OCI_SUPPORT:"
+    line: "FEATURE_GENERAL_OCI_SUPPORT: true"
+    create: true
+
+
+- name: Helm Feature
+  tags: [finish-setup]
+  lineinfile:
+    path: "{{ volumes_dir }}/quay-config/config.yaml"
+    regexp: "^FEATURE_EXPERIMENTAL_HELM_OCI_SUPPORT:"
+    line: "FEATURE_EXPERIMENTAL_HELM_OCI_SUPPORT: true"
+    create: true

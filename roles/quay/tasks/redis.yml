@@ -1,14 +1,12 @@
 ---
-- name: Quay Redis container
-  docker_container:
+- name: quay redis container
+  tags: [start-setup, restart-all, restart-redis]
+  containers.podman.podman_container:
     name: quay-redis
     image: registry.redhat.io/rhscl/redis-32-rhel7:latest
     volumes:
       - "{{ volumes_dir }}/quay-redis:/var/lib/redis:Z"
     ports:
       - "6379:6379"
-    etc_hosts:
-      "{{ quay_host }}:{{ quay_ip }}"
-    keep_volumes: true
-    auto_remove: true
+    rm: true
     state: started

@@ -92,7 +92,7 @@
     # docker run --rm -it --name quay-test-mysql -e MYSQL_ROOT_PASSWORD=redhat -e MYSQL_USER=quay -e MYSQL_PASSWORD=quay -e MYSQL_DATABASE=quay -v /home/thomasmckay/quay-volumes/quay-test-mysql:/var/lib/mysql/data:Z registry.redhat.io/rhscl/mysql-57-rhel7:latest
     - name: Quay Mysql container
       tags: [mysql]
-      docker_container:
+      containers.podman.podman_container:
         name: quay-test-mysql
         image: registry.redhat.io/rhscl/mysql-57-rhel7:latest
         volumes:
@@ -102,18 +102,14 @@
           MYSQL_USER: quay
           MYSQL_PASSWORD: quay
           MYSQL_DATABASE: quay
+          MYSQL_SSL_CERT: {{ volumes_dir }}/certs/rootCA.crt
+          MYSQL_SSL_KEY: {{ volumes_dir }}/certs/rootCA.key
         ports:
           - "5434:3306"
         keep_volumes: true
-        auto_remove: true
+        rm: true
         state: started
         restart: true
-        etc_hosts:
-          # This does not expand the hostname that lands in /etc/hosts
-          # "{{ quay_host }}": "{{ quay_ip }}"
-          thomasmckay.usersys.redhat.com: 192.168.1.48
-          thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-          thomasmckay-nyc.usersys.redhat.com: 192.168.1.50
       register: result
       until: result is succeeded
       retries: 5

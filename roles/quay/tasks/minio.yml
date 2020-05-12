@@ -1,0 +1,34 @@
+---
+# Pre-setup required
+#     % aws configure
+#     AWS Access Key ID [None]: minioadmin
+#     AWS Secret Access Key [None]: minioadmin
+#     Default region name [None]: us-east-1
+#     Default output format [None]: ENTER
+#
+- name: "MinIO container"
+  tags: [start-setup, restart-minio, restart-all]
+  containers.podman.podman_container:
+    name: quay-minio
+    image: minio/minio
+    command:
+      - server
+      - /data
+    volumes:
+      - "{{ volumes_dir }}/quay-storage/minio:/data:Z"
+    ports:
+      - "9000:9000"
+    rm: true
+    state: started
+    restart: true
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 10
+
+- name: MinIO config
+  tags: [start-setup]
+  shell:
+    cmd: |
+      aws --endpoint-url http://{{ quay_host }}:9000 --no-verify-ssl s3 mb s3://quay-bucket-1
+      aws --endpoint-url http://{{ quay_host }}:9000 --no-verify-ssl s3 mb s3://quay-bucket-2
