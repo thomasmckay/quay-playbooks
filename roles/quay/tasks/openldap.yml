@@ -1,0 +1,133 @@
+---
+- name: Stop OpenLDAP containers
+  tags: [start-setup, restart-openldap]
+  ignore_errors: true
+  shell:
+    cmd: |
+      podman kill quay-openldap
+
+- name: Remove prior OpenLDAP data and volume folders
+  tags: [start-setup, restart-openldap]
+  command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
+  args:
+    removes: "{{ volumes_dir }}/{{ item }}"
+  with_items:
+    - openldap
+
+- name: Create OpenLDAP volume folders
+  tags: [start-setup, restart-openldap]
+  file:
+    path: "{{ volumes_dir }}/{{ item }}"
+    state: directory
+  with_items:
+    - openldap/config
+    - openldap/database
+    - openldap/certs
+
+# To communicate with this server, the ip address needs to be used in config
+#   podman inspect -f "{{ .NetworkSettings.IPAddress }}" quay-openldap
+# Not sure why
+- name: OpenLDAP container
+  # No start-setup tag until working
+  tags: [start-setup, restart-openldap]
+  containers.podman.podman_container:
+    name: quay-openldap
+    image: osixia/openldap:1.3.0
+    env:
+      LDAP_ADMIN_PASSWORD: changeme
+      LDAP_ORGANISATION: acmecorp
+      LDAP_DOMAIN: acmecorp.com
+      LDAP_BASE_DN: "dc=acmecorp,dc=com"
+      LDAP_TLS_VERIFY_CLIENT: try
+    volumes:
+      - "{{ volumes_dir }}/openldap/config:/etc/ldap/slapd.d:Z"
+      - "{{ volumes_dir }}/openldap/database:/var/lib/ldap:Z"
+      - "{{ volumes_dir }}/openldap/certs:/tmp/certs:Z"
+    ports:
+      - "3389:389"
+      - "6636:636"
+    rm: true
+    state: started
+    restart: true
+    hostname: "{{ quay_host }}"
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 10
+
+- name: Install Openldap Cert
+  tags: [start-setup, restart-openldap]
+  shell:
+    cmd: |
+       podman exec quay-openldap bash -c "cp /container/service/slapd/assets/certs/ca.crt /tmp/certs/openldap.crt"
+       sudo cp {{ volumes_dir}}/openldap/certs/openldap.crt /etc/pki/ca-trust/source/anchors/openldap.crt
+       sudo update-ca-trust extract
+       cp {{ volumes_dir}}/openldap/certs/openldap.crt {{ volumes_dir}}/quay-config/extra_ca_certs/openldap.crt
+
+# Helper:
+#   alias qdappasswd="docker exec quay-openldap ldappasswd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+#   alias qdapmodify="docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+#   alias qdapadd="docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+#   alias qdapsearch="docker exec quay-openldap ldapsearch -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+# Passwords:
+#   quayldap uid=john,ou=users,dc=acmecorp,dc=com
+#   podman exec -it quay-openldap slappasswd -h {SSHA}
+# Searches:
+#   quayldap -b dc=acmecorp,dc=com "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=acmecorp,dc=com))"
+#
+# LDAPTLS_CACERT=/home/thomasmckay/quay-volumes/openldap/certs/openldap.crt ldapsearch -H ldaps://thomasmckay.usersys.redhat.com:6636 -D cn=admin,dc=acmecorp,dc=com -w changeme -b dc=acmecorp,dc=com
+- name: Initialize OpenLDAP
+  tags: [start-setup, setup-openldap]
+  shell:
+    cmd: |
+      sudo chmod -R a+rwx {{ volumes_dir }}/openldap
+
+      cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/setup-openldap.ldif
+      dn: ou=Users,dc=acmecorp,dc=com
+      objectClass: top
+      objectClass: organizationalUnit
+      ou: Users
+
+      dn: ou=Groups,dc=acmecorp,dc=com
+      objectClass: top
+      objectClass: organizationalUnit
+      ou: Groups
+
+      dn: uid=billy,dc=acmecorp,dc=com
+      uid: billy
+      cn: billy
+      sn: 3
+      objectClass: top
+      objectClass: posixAccount
+      objectClass: inetOrgPerson
+      loginShell: /bin/bash
+      homeDirectory: /home/billy
+      uidNumber: 14383102
+      gidNumber: 14364100
+      userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
+      mail: billy@acmecorp.com
+      gecos: Billy User
+
+      dn: uid=john,ou=Users,dc=acmecorp,dc=com
+      uid: john
+      cn: john
+      sn: 3
+      objectClass: top
+      objectClass: posixAccount
+      objectClass: inetOrgPerson
+      loginShell: /bin/bash
+      homeDirectory: /home/john
+      uidNumber: 14383103
+      gidNumber: 14364101
+      userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
+      mail: john@acmecorp.com
+      gecos: John User
+
+      dn: cn=admin,ou=Groups,dc=acmecorp,dc=com
+      objectClass: groupOfUniqueNames
+      cn: admin
+      description: Admin users
+      uniqueMember: uid=admin,dc=acmecorp,dc=com
+      uniqueMember: uid=john,ou=Users,dc=acmecorp,dc=com
+      EOF
+      podman exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/setup-openldap.ldif

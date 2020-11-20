@@ -1,0 +1,17 @@
+---
+- import_tasks: teardown.yml
+- import_tasks: setup.yml
+
+- import_tasks: certs.yml
+- import_tasks: postgresql.yml
+- import_tasks: minio.yml
+- import_tasks: openldap.yml
+- import_tasks: redis.yml
+
+- import_tasks: quay-config.yml
+- import_tasks: clair.yml
+- import_tasks: quay.yml
+
+- import_tasks: prometheus.yml
+- import_tasks: grafana.yml
+- import_tasks: swagger.yml

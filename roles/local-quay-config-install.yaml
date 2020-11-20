@@ -1,8 +1,0 @@
----
-- name: Install config
-  shell:
-    cmd: |
-      mv {{ downloads_dir }}/quay-config.tar.gz {{ volumes_dir }}/quay-config/quay-config.tar.gz
-      tar xvf {{ volumes_dir }}/quay-config/quay-config.tar.gz -C {{ volumes_dir }}/quay-config
-      mv {{ downloads_dir }}/Downloads/security_scanner.pem {{ volumes_dir }}/quay-config
-

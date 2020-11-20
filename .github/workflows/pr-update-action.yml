@@ -30,7 +30,7 @@ jobs:
         uppercase-title: true
 
         # required - text template to prefix body
-        body-template: '[%branch%](https://browse/ticket/%branch%)'
+        body-template: '[%branch%](https://issues.redhat.com/browse/%branch%)'
 
         # optional - whether to prefix or replace body with body-template
         replace-body: false

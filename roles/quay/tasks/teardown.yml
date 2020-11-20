@@ -1,0 +1,44 @@
+---
+- name: Add read permission to all data and volume folders
+  tags: [teardown, start-setup]
+  command: "sudo chmod -R a+r {{ volumes_dir }}"
+
+
+- name: Stop podman processes
+  tags: [teardown, start-setup]
+  ignore_errors: true
+  shell:
+    cmd: |
+      podman kill {{ item }}
+  with_items:
+    - quay-postgresql
+    - quay-postgresql-replica
+    - clair-postgresql
+    - quay-redis
+    - quay
+    - quay-config
+    - clair
+    - grafana
+    - prometheus
+    - swagger
+    - quay-minio
+    - quay-openldap
+
+
+- name: Remove prior data and volume folders
+  tags: [teardown, start-setup]
+  command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
+  args:
+    removes: "{{ volumes_dir }}/{{ item }}"
+  with_items:
+    - quay-redis
+    - quay-postgresql
+    - quay-postgresql-replica
+    - clair-postgresql
+    - quay-storage
+    - quay-config
+    - clair-config
+    - quay-builder
+    - certs
+    - prometheus
+    - openldap

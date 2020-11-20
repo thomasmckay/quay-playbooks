@@ -1,0 +1,29 @@
+---
+- name: create prometheus.yml
+  tags: [start-setup, redeploy-prometheus]
+  vars:
+    quay_endpoint: "{{ quay_host }}:9091"
+  shell:
+    cmd: |
+      cat <<EOF > {{ volumes_dir }}/prometheus/prometheus.yml
+      global:
+        scrape_interval:     15s
+        evaluation_interval: 15s
+      scrape_configs:
+        - job_name: 'quay'
+          static_configs:
+            - targets: ['{{ quay_endpoint }}']
+      EOF
+
+- name: prometheus container
+  tags: [finish-setup, restart-all, restart-prometheus, redeploy-prometheus]
+  containers.podman.podman_container:
+    name: prometheus
+    image: registry.redhat.io/openshift3/prometheus:v3.11
+    volumes:
+      - "{{ volumes_dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:Z"
+    ports:
+      - "8555:9090"
+    rm: true
+    state: started
+    restart: true

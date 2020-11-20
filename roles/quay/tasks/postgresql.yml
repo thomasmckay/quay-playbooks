@@ -1,0 +1,99 @@
+---
+#  psql "postgres://quay:quay@thomasmckay.usersys.redhat.com:5432/quay"
+
+- name: Quay Postgresql container
+  tags: [start-setup, restart-all, restart-postgresql]
+  containers.podman.podman_container:
+    name: quay-postgresql
+    image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
+    volumes:
+      - "{{ volumes_dir }}/quay-postgresql:/var/lib/postgresql/data/pgdata:Z"
+      #- "{{ volumes_dir }}/quay-postgresql:/var/lib/pgsql/data/userdata:Z"
+    env:
+      POSTGRESQL_USER: quay
+      POSTGRESQL_PASSWORD: quay
+      POSTGRESQL_DATABASE: quay
+      POSTGRESQL_REPLICATION_MODE: master
+      POSTGRESQL_REPLICATION_USER: quay
+      POSTGRESQL_REPLICATION_PASSWORD: quay
+    ports:
+      - "5432:5432"
+    #keep_volumes: true
+    #auto_remove: true
+    rm: true
+    state: started
+    restart: true
+
+- name: Postgresql add pg_trgm extension
+  tags: [start-setup, restart-all, restart-postgresql]
+  shell:
+    cmd: |
+      podman exec quay-postgresql bash -l -c 'echo "CREATE EXTENSION pg_trgm" | psql quay'
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 10
+
+- name: Quay Postgresql Replica container
+  tags: [restart-postgresql-replica]
+  containers.podman.podman_container:
+    name: quay-postgresql-replica
+    image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
+    volumes:
+      - "{{ volumes_dir }}/quay-postgresql-replica:/var/lib/postgresql/data/pgdata:Z"
+      #- "{{ volumes_dir }}/quay-postgresql-replica:/var/lib/pgsql/data/userdata:Z"
+    env:
+      POSTGRESQL_MASTER_HOST: "{{ quay_host }}"
+      POSTGRESQL_MASTER_PORT_NUMBER: "5432"
+      POSTGRESQL_REPLICATION_MODE: replica
+      POSTGRESQL_REPLICATION_USER: quay
+      POSTGRESQL_REPLICATION_PASSWORD: quay
+    ports:
+      - "5433:5432"
+    #keep_volumes: true
+    #auto_remove: true
+    rm: true
+    state: started
+    restart: true
+
+- name: Postgresql add pg_trgm extension
+  tags: [restart-postgresql-replica]
+  shell:
+    cmd: |
+      podman exec quay-postgresql-replica bash -l -c 'echo "CREATE EXTENSION pg_trgm" | psql quay'
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 10
+
+#  psql "postgres://quay:quay@thomasmckay.usersys.redhat.com:5432/clair"
+- name: Clair Postgresql container
+  tags: [start-setup, restart-all, restart-postgresql]
+  containers.podman.podman_container:
+    name: clair-postgresql
+    image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
+    volumes:
+      - "{{ volumes_dir }}/clair-postgresql:/var/lib/postgresql/data/pgdata:Z"
+      #- "{{ volumes_dir }}/clair-postgresql:/var/lib/pgsql/data/userdata:Z"
+    env:
+      POSTGRESQL_USER: clair
+      POSTGRESQL_PASSWORD: clair
+      POSTGRESQL_DATABASE: clair
+      POSTGRESQL_REPLICATION_MODE: master
+      POSTGRESQL_REPLICATION_USER: clair
+      POSTGRESQL_REPLICATION_PASSWORD: clair
+    ports:
+      - "5433:5432"
+    rm: true
+    state: started
+    restart: true
+
+- name: Clair postgresql add uuid-ossp extension
+  tags: [start-setup, restart-all, restart-postgresql]
+  shell:
+    cmd: |
+      podman exec clair-postgresql bash -l -c 'echo "CREATE EXTENSION \"uuid-ossp\"" | psql clair'
+  register: result
+  until: result is succeeded
+  retries: 5
+  delay: 10

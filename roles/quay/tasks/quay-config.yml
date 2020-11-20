@@ -1,26 +1,19 @@
 ---
-- name: Pull latest image
-  shell:
-    cmd: |
-      docker pull {{ quay_image }}
-
 - name: Quay Config container
-  docker_container:
+  tags: [start-setup, restart-config]
+  containers.podman.podman_container:
     name: quay-config
     image: "{{ quay_image }}"
     volumes:
-      - ~/quay-config:/conf/stack
-      - ~/quay-storage:/datastorage
+      - "{{ volumes_dir }}/quay-config:/conf/stack:Z"
+      - "/home/thomasmckay/code/quay-devel:/home/thomasmckay/code/quay-devel:Z"
     env:
       QUAYENTRY: config
       CONFIG_APP_PASSWORD: password
     ports:
       - "9080:8080"
       - "9443:8443"
-    etc_hosts:
-      thomasmckay-desktop.usersys.redhat.com: 192.168.1.2
-    keep_volumes: true
-    auto_remove: true
+    rm: true
     state: started
     restart: true
   register: result
