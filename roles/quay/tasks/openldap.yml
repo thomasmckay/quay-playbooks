@@ -1,13 +1,13 @@
 ---
 - name: Stop OpenLDAP containers
-  tags: [start-setup, restart-openldap]
+  tags: [start-setup, restart-openldap, setup-openldap]
   ignore_errors: true
   shell:
     cmd: |
       podman kill quay-openldap
 
 - name: Remove prior OpenLDAP data and volume folders
-  tags: [start-setup, restart-openldap]
+  tags: [start-setup, restart-openldap, setup-openldap]
   command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
   args:
     removes: "{{ volumes_dir }}/{{ item }}"
@@ -15,7 +15,7 @@
     - openldap
 
 - name: Create OpenLDAP volume folders
-  tags: [start-setup, restart-openldap]
+  tags: [start-setup, restart-openldap, setup-openldap]
   file:
     path: "{{ volumes_dir }}/{{ item }}"
     state: directory
@@ -28,16 +28,15 @@
 #   podman inspect -f "{{ .NetworkSettings.IPAddress }}" quay-openldap
 # Not sure why
 - name: OpenLDAP container
-  # No start-setup tag until working
-  tags: [start-setup, restart-openldap]
+  tags: [start-setup, restart-openldap, setup-openldap]
   containers.podman.podman_container:
     name: quay-openldap
     image: osixia/openldap:1.3.0
     env:
       LDAP_ADMIN_PASSWORD: changeme
-      LDAP_ORGANISATION: acmecorp
-      LDAP_DOMAIN: acmecorp.com
-      LDAP_BASE_DN: "dc=acmecorp,dc=com"
+      LDAP_ORGANISATION: example
+      LDAP_DOMAIN: example.org
+      LDAP_BASE_DN: "dc=example,dc=org"
       LDAP_TLS_VERIFY_CLIENT: try
     volumes:
       - "{{ volumes_dir }}/openldap/config:/etc/ldap/slapd.d:Z"
@@ -56,26 +55,32 @@
   delay: 10
 
 - name: Install Openldap Cert
-  tags: [start-setup, restart-openldap]
+  tags: [start-setup, restart-openldap, setup-openldap]
   shell:
     cmd: |
        podman exec quay-openldap bash -c "cp /container/service/slapd/assets/certs/ca.crt /tmp/certs/openldap.crt"
        sudo cp {{ volumes_dir}}/openldap/certs/openldap.crt /etc/pki/ca-trust/source/anchors/openldap.crt
        sudo update-ca-trust extract
-       cp {{ volumes_dir}}/openldap/certs/openldap.crt {{ volumes_dir}}/quay-config/extra_ca_certs/openldap.crt
+       #cp {{ volumes_dir}}/openldap/certs/openldap.crt {{ volumes_dir}}/quay-config/extra_ca_certs/openldap.crt
 
 # Helper:
-#   alias qdappasswd="docker exec quay-openldap ldappasswd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
-#   alias qdapmodify="docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
-#   alias qdapadd="docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
-#   alias qdapsearch="docker exec quay-openldap ldapsearch -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme "
+#   alias qdappasswd="docker exec quay-openldap ldappasswd -x -H ldap://localhost -D cn=admin,dc=example,dc=org -w changeme "
+#   alias qdapmodify="docker exec quay-openldap ldapmodify -x -H ldap://localhost -D cn=admin,dc=example,dc=org -w changeme "
+#   alias qdapadd="docker exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=example,dc=org -w changeme "
+#   alias qdapsearch="docker exec quay-openldap ldapsearch -x -H ldap://localhost -D cn=admin,dc=example,dc=org -w changeme "
 # Passwords:
-#   quayldap uid=john,ou=users,dc=acmecorp,dc=com
+#   quayldap uid=john,ou=users,dc=example,dc=org
 #   podman exec -it quay-openldap slappasswd -h {SSHA}
 # Searches:
-#   quayldap -b dc=acmecorp,dc=com "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=acmecorp,dc=com))"
+#   quayldap -b dc=example,dc=org "(&(objectCategory=users)(memberOf=cn=group2,ou=groups,dc=example,dc=org))"
 #
-# LDAPTLS_CACERT=/home/thomasmckay/quay-volumes/openldap/certs/openldap.crt ldapsearch -H ldaps://thomasmckay.usersys.redhat.com:6636 -D cn=admin,dc=acmecorp,dc=com -w changeme -b dc=acmecorp,dc=com
+# LDAPTLS_CACERT=/home/thomasmckay/quay-volumes/openldap/certs/openldap.crt ldapsearch -H ldaps://thomasmckay.usersys.redhat.com:6636 -D cn=admin,dc=example,dc=org -w changeme -b dc=example,dc=org
+#
+# For config.yaml
+#     LDAP_USER_FILTER: (memberOf=cn=states,ou=groups,dc=example,dc=org)
+# or
+#     LDAP_USER_FILTER: (|(memberOf=cn=states,ou=groups,dc=example,dc=org)(memberOf=cn=cities,ou=groups,dc=example,dc=org))
+#
 - name: Initialize OpenLDAP
   tags: [start-setup, setup-openldap]
   shell:
@@ -83,51 +88,100 @@
       sudo chmod -R a+rwx {{ volumes_dir }}/openldap
 
       cat <<EOF > /home/thomasmckay/quay-volumes/openldap/config/setup-openldap.ldif
-      dn: ou=Users,dc=acmecorp,dc=com
+      dn: ou=Users,dc=example,dc=org
       objectClass: top
       objectClass: organizationalUnit
       ou: Users
 
-      dn: ou=Groups,dc=acmecorp,dc=com
+      dn: ou=Groups,dc=example,dc=org
       objectClass: top
       objectClass: organizationalUnit
       ou: Groups
 
-      dn: uid=billy,dc=acmecorp,dc=com
-      uid: billy
-      cn: billy
+      dn: uid=newyork,ou=Users,dc=example,dc=org
+      uid: newyork
+      cn: newyork
       sn: 3
       objectClass: top
       objectClass: posixAccount
       objectClass: inetOrgPerson
       loginShell: /bin/bash
-      homeDirectory: /home/billy
-      uidNumber: 14383102
-      gidNumber: 14364100
+      homeDirectory: /home/newyork
+      uidNumber: 11
+      gidNumber: 1
       userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
-      mail: billy@acmecorp.com
-      gecos: Billy User
+      mail: newyork@example.org
+      gecos: New York User
 
-      dn: uid=john,ou=Users,dc=acmecorp,dc=com
-      uid: john
-      cn: john
+      dn: uid=vermont,ou=Users,dc=example,dc=org
+      uid: vermont
+      cn: vermont
       sn: 3
       objectClass: top
       objectClass: posixAccount
       objectClass: inetOrgPerson
       loginShell: /bin/bash
-      homeDirectory: /home/john
-      uidNumber: 14383103
-      gidNumber: 14364101
+      homeDirectory: /home/vermont
+      uidNumber: 12
+      gidNumber: 1
       userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
-      mail: john@acmecorp.com
-      gecos: John User
+      mail: vermont@example.org
+      gecos: Vermont User
 
-      dn: cn=admin,ou=Groups,dc=acmecorp,dc=com
+      dn: cn=states,ou=Groups,dc=example,dc=org
+      objectClass: groupOfUniqueNames
+      objectClass: top
+      ou: Groups
+      cn: states
+      description: States
+      uniqueMember: uid=newyork,ou=Users,dc=example,dc=org
+      uniqueMember: uid=vermont,ou=Users,dc=example,dc=org
+
+      dn: uid=syracuse,ou=Users,dc=example,dc=org
+      uid: syracuse
+      cn: syracuse
+      sn: 3
+      objectClass: top
+      objectClass: posixAccount
+      objectClass: inetOrgPerson
+      loginShell: /bin/bash
+      homeDirectory: /home/syracuse
+      uidNumber: 21
+      gidNumber: 1
+      userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
+      mail: syracuse@example.org
+      gecos: Syracuse User
+
+      dn: uid=burlington,ou=Users,dc=example,dc=org
+      uid: burlington
+      cn: burlington
+      sn: 3
+      objectClass: top
+      objectClass: posixAccount
+      objectClass: inetOrgPerson
+      loginShell: /bin/bash
+      homeDirectory: /home/burlington
+      uidNumber: 22
+      gidNumber: 1
+      userPassword: {SSHA}QVzVRrrhgApHMmSehx6ItRA30URKJ1I6
+      mail: burlington@example.org
+      gecos: Burlington User
+
+      dn: cn=cities,ou=Groups,dc=example,dc=org
+      objectClass: groupOfUniqueNames
+      objectClass: top
+      ou: Groups
+      cn: cities
+      description: Cities
+      uniqueMember: uid=syracuse,ou=Users,dc=example,dc=org
+      uniqueMember: uid=burlington,ou=Users,dc=example,dc=org
+
+      dn: cn=admin,ou=Groups,dc=example,dc=org
       objectClass: groupOfUniqueNames
       cn: admin
       description: Admin users
-      uniqueMember: uid=admin,dc=acmecorp,dc=com
-      uniqueMember: uid=john,ou=Users,dc=acmecorp,dc=com
+      uniqueMember: uid=admin,dc=example,dc=org
+      uniqueMember: uid=vermont,ou=Users,dc=example,dc=org
       EOF
-      podman exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=acmecorp,dc=com -w changeme -f /etc/ldap/slapd.d/setup-openldap.ldif
+
+      podman exec quay-openldap ldapadd -x -H ldap://localhost -D cn=admin,dc=example,dc=org -w changeme -f /etc/ldap/slapd.d/setup-openldap.ldif
