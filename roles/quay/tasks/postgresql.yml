@@ -1,14 +1,23 @@
 ---
 #  psql "postgres://quay:quay@thomasmckay.usersys.redhat.com:5432/quay"
+# Read-only https://access.redhat.com/articles/5411111
 
-- name: Quay Postgresql container
-  tags: [start-setup, restart-all, restart-postgresql]
+- name: quay postgresql - create volume
+  tags: [aio-install]
+  file:
+    path: "{{ volumes_dir }}/{{ item }}"
+    state: directory
+    mode: "a+rwx"
+  with_items:
+    - quay-postgresql
+
+- name: quay postgresql - start container
+  tags: [aio-install, start-setup, restart-all, restart-postgresql]
   containers.podman.podman_container:
     name: quay-postgresql
     image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
     volumes:
       - "{{ volumes_dir }}/quay-postgresql:/var/lib/postgresql/data/pgdata:Z"
-      #- "{{ volumes_dir }}/quay-postgresql:/var/lib/pgsql/data/userdata:Z"
     env:
       POSTGRESQL_USER: quay
       POSTGRESQL_PASSWORD: quay
@@ -18,14 +27,12 @@
       POSTGRESQL_REPLICATION_PASSWORD: quay
     ports:
       - "5432:5432"
-    #keep_volumes: true
-    #auto_remove: true
     rm: true
     state: started
     restart: true
 
-- name: Postgresql add pg_trgm extension
-  tags: [start-setup, restart-all, restart-postgresql]
+- name: quay postgresql - add pg_trgm extension
+  tags: [aio-install, start-setup, restart-all, restart-postgresql]
   shell:
     cmd: |
       podman exec quay-postgresql bash -l -c 'echo "CREATE EXTENSION pg_trgm" | psql quay'
@@ -41,15 +48,17 @@
     image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
     volumes:
       - "{{ volumes_dir }}/quay-postgresql-replica:/var/lib/postgresql/data/pgdata:Z"
-      #- "{{ volumes_dir }}/quay-postgresql-replica:/var/lib/pgsql/data/userdata:Z"
     env:
+      POSTGRESQL_USER: quay
+      POSTGRESQL_PASSWORD: quay
+      POSTGRESQL_DATABASE: quay
       POSTGRESQL_MASTER_HOST: "{{ quay_host }}"
       POSTGRESQL_MASTER_PORT_NUMBER: "5432"
-      POSTGRESQL_REPLICATION_MODE: replica
+      POSTGRESQL_REPLICATION_MODE: slave
       POSTGRESQL_REPLICATION_USER: quay
       POSTGRESQL_REPLICATION_PASSWORD: quay
     ports:
-      - "5433:5432"
+      - "5434:5432"
     #keep_volumes: true
     #auto_remove: true
     rm: true
@@ -66,7 +75,6 @@
   retries: 5
   delay: 10
 
-#  psql "postgres://quay:quay@thomasmckay.usersys.redhat.com:5432/clair"
 - name: Clair Postgresql container
   tags: [start-setup, restart-all, restart-postgresql]
   containers.podman.podman_container:
@@ -74,7 +82,6 @@
     image: registry.redhat.io/rhscl/postgresql-96-rhel7:latest
     volumes:
       - "{{ volumes_dir }}/clair-postgresql:/var/lib/postgresql/data/pgdata:Z"
-      #- "{{ volumes_dir }}/clair-postgresql:/var/lib/pgsql/data/userdata:Z"
     env:
       POSTGRESQL_USER: clair
       POSTGRESQL_PASSWORD: clair
@@ -97,3 +104,22 @@
   until: result is succeeded
   retries: 5
   delay: 10
+
+
+- name: quay postgresql - stop container
+  tags: [aio-uninstall]
+  ignore_errors: true
+  shell:
+    cmd: |
+      podman kill {{ item }}
+  with_items:
+    - quay-postgresql
+
+
+- name: quay postgresql - remove volume folder
+  tags: [aio-uninstall]
+  command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
+  args:
+    removes: "{{ volumes_dir }}/{{ item }}"
+  with_items:
+    - quay-postgresql

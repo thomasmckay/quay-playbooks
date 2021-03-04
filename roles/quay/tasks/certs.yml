@@ -1,6 +1,28 @@
+# Maybe this?
+# https://itnext.io/postgresql-docker-image-with-ssl-certificate-signed-by-a-custom-certificate-authority-ca-3df41b5b53
 ---
-- name: Create TLS cert and key
-  tags: [start-setup, regenerate-certs]
+
+- name: certs - create volume folder
+  tags: [aio-install]
+  file:
+    path: "{{ volumes_dir }}/{{ item }}"
+    state: directory
+    mode: "a+rwx"
+  with_items:
+    - certs
+
+
+- name: certs - remove volume folder
+  tags: [aio-uninstall]
+  file:
+    path: "{{ volumes_dir }}/{{ item }}"
+    state: absent
+  with_items:
+    - certs
+
+
+- name: certs - create TLS cert and key
+  tags: [aio-install, start-setup, regenerate-certs]
   shell:
     cmd: |
       rm {{ volumes_dir }}/certs/*
@@ -8,7 +30,7 @@
       cp /etc/pki/tls/openssl.cnf {{ volumes_dir }}/certs/openssl.cnf
       cat <<EOF >> {{ volumes_dir }}/certs/openssl.cnf
       [ san ]
-      subjectAltName="DNS: {{ quay_host }}:{{ quay_https_port }}"
+      subjectAltName="DNS: {{ quay_host }}"
       EOF
 
       # Root CA
@@ -48,7 +70,7 @@
           -CAcreateserial -extensions v3_req -extfile {{ volumes_dir }}/certs/openssl.cnf
 
 - name: Install rootCA
-  tags: [start-setup]
+  tags: [aio-install, start-setup]
   shell:
     cmd: |
       sudo cp {{ volumes_dir }}/certs/rootCA.crt /etc/pki/ca-trust/source/anchors

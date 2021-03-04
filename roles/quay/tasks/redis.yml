@@ -1,6 +1,17 @@
 ---
-- name: quay redis container
-  tags: [start-setup, restart-all, restart-redis]
+
+- name: quay redis - create volume
+  tags: [aio-install]
+  file:
+    path: "{{ volumes_dir }}/{{ item }}"
+    state: directory
+    mode: "a+rwx"
+  with_items:
+    - quay-redis
+
+
+- name: quay redis - start container
+  tags: [aio-install, start-setup, restart-all, restart-redis]
   containers.podman.podman_container:
     name: quay-redis
     image: registry.redhat.io/rhscl/redis-32-rhel7:latest
@@ -10,3 +21,22 @@
       - "6379:6379"
     rm: true
     state: started
+
+
+- name: quay redis - stop container
+  tags: [aio-uninstall]
+  ignore_errors: true
+  shell:
+    cmd: |
+      podman kill {{ item }}
+  with_items:
+    - quay-redis
+
+
+- name: quay redis - remove volume folder
+  tags: [aio-uninstall]
+  command: "sudo rm -Rf {{ volumes_dir }}/{{ item }}"
+  args:
+    removes: "{{ volumes_dir }}/{{ item }}"
+  with_items:
+    - quay-redis
